@@ -77,3 +77,9 @@ If the PHP API endpoints are unavailable or return non-JSON, the leaderboard and
    - `data/.htaccess` denies all direct HTTP requests to `data/`.
    - `api/.htaccess` blocks direct web access to `api/db.php` and `api/seed_dev.php`.
 4. Confirm `KB.CONFIG.ARCADE_URL` in `js/config.js` points to `https://arcade.stabthefinger.com` and Open Graph tags in `index.html` reference `https://kaijubrawl.stabthefinger.com/assets/og.png`.
+
+---
+
+## License
+
+MIT License © 2026 Anthony Moore / None Yet Studios
