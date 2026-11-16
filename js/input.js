@@ -23,6 +23,7 @@
     dodgePressed: 0,
     specialPressed: 0,
     ultimatePressed: 0,
+    facePressed: 0,
     pausePressed: 0
   };
 
@@ -38,6 +39,7 @@
     dodgePressed: false,
     specialPressed: false,
     ultimatePressed: false,
+    facePressed: false,
     pausePressed: false
   };
 
@@ -79,6 +81,7 @@
     else if (act === 'dodge') buf.dodgePressed = BUFFER_TICKS;
     else if (act === 'special') buf.specialPressed = BUFFER_TICKS;
     else if (act === 'ultimate') buf.ultimatePressed = BUFFER_TICKS;
+    else if (act === 'face') buf.facePressed = BUFFER_TICKS;
     else if (act === 'pause') buf.pausePressed = BUFFER_TICKS;
   }
 
@@ -88,9 +91,13 @@
     KeyK: 'heavy',
     KeyL: 'grab',
     Space: 'jump',
+    Semicolon: 'dodge',
     KeyC: 'dodge',
+    KeyI: 'special',
     KeyQ: 'special',
+    KeyO: 'ultimate',
     KeyE: 'ultimate',
+    KeyH: 'face',
     KeyP: 'pause',
     Escape: 'pause'
   };
@@ -297,10 +304,11 @@
     intent.grab = buf.grab > 0;
     intent.jumpPressed = buf.jumpPressed > 0;
     intent.jumpHeld = !!keys.Space || touchHeld.jump > 0;
-    intent.blockHeld = !!keys.ShiftLeft || !!keys.ShiftRight || touchHeld.block > 0;
+    intent.blockHeld = !!keys.KeyU || !!keys.ShiftLeft || !!keys.ShiftRight || touchHeld.block > 0;
     intent.dodgePressed = buf.dodgePressed > 0;
     intent.specialPressed = buf.specialPressed > 0;
     intent.ultimatePressed = buf.ultimatePressed > 0;
+    intent.facePressed = buf.facePressed > 0;
     intent.pausePressed = buf.pausePressed > 0;
     return intent;
   }

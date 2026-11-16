@@ -114,8 +114,18 @@
     return p;
   }
 
+  function grantFuel(k, rawAmount, city) {
+    if (!k || !rawAmount) return 0;
+    const mult = (KB.Entities && KB.Entities.getFuelGainMult) ? KB.Entities.getFuelGainMult(k, city) : 1.0;
+    const amt = rawAmount * mult;
+    k.fuel = Math.min(k.fuelMax, k.fuel + amt);
+    k.overcharged = k.fuel >= 80;
+    return amt;
+  }
+
   function spawnComicCard(cctx, x, y, z, text, color) {
     if (!cctx || cctx.headless || !cctx.comicCards) return;
+    if (cctx.comicCards.length >= 8) cctx.comicCards.shift();
     cctx.comicCards.push({
       x: x,
       y: y,
@@ -130,6 +140,7 @@
 
   function addPopup(cctx, x, y, z, text, color, scale) {
     if (!cctx || cctx.headless) return;
+    if (cctx.popups.length >= 20) cctx.popups.shift();
     cctx.popups.push({
       x: x,
       y: y,
@@ -144,6 +155,7 @@
 
   function addSpark(cctx, x, y, z, color, size) {
     if (!cctx || cctx.headless) return;
+    if (cctx.sparks.length >= 40) cctx.sparks.shift();
     cctx.sparks.push({
       x: x,
       y: y,
@@ -198,10 +210,41 @@
       return k.stateTick >= DODGE_IFRAME_START && k.stateTick <= DODGE_IFRAME_END;
     }
     if (k.state === 'knockdown') return true;
-    if (k.state === 'getup') {
-      return k.stateTick > (GETUP_TICKS - GETUP_IFRAME_TICKS);
-    }
+    if (k.state === 'getup') return true;
+    if ((k.wakeupGraceTicks || 0) > 0) return true;
     return false;
+  }
+
+  function findNearestOpponent(k, allKaijus) {
+    if (!allKaijus || !allKaijus.length) return null;
+    let best = null;
+    let bestDist = Infinity;
+    for (let i = 0; i < allKaijus.length; i++) {
+      const o = allKaijus[i];
+      if (!o || o.id === k.id || o.hp <= 0 || o.state === 'ko') continue;
+      const d = Math.hypot(o.x - k.x, o.y - k.y);
+      if (d < bestDist) {
+        bestDist = d;
+        best = o;
+      }
+    }
+    return best ? { opp: best, dist: bestDist } : null;
+  }
+
+  function autoFaceOpponent(k, intent, allKaijus, maxRange) {
+    const nearest = findNearestOpponent(k, allKaijus);
+    if (!nearest || nearest.dist > (maxRange || 4.5)) return false;
+    const toOpp = U.vec2.norm(nearest.opp.x - k.x, nearest.opp.y - k.y);
+    if (intent && (intent.moveX !== 0 || intent.moveY !== 0)) {
+      const stickMag = Math.hypot(intent.moveX, intent.moveY);
+      const wd = KB.Iso.screenDirToWorld(intent.moveX, intent.moveY);
+      if (stickMag >= 0.35 && (wd.x * toOpp.x + wd.y * toOpp.y) <= -0.4) {
+        return false;
+      }
+    }
+    k.dirX = toOpp.x;
+    k.dirY = toOpp.y;
+    return true;
   }
 
   function hasArmor(k) {
@@ -209,10 +252,10 @@
     if (k.state !== 'heavy' || !k.attack || !k.armorCharges) return false;
     const def = k.attack.def || MOVES.heavy;
     if (def.kind === 'rocket_fist') return false;
-    return k.stateTick >= def.armorStart && k.stateTick <= def.armorEnd;
+    return k.stateTick >= (def.armorStart || 6) && k.stateTick <= (def.armorEnd || 14);
   }
 
-  function startAttack(k, moveName, intent) {
+  function startAttack(k, moveName, intent, allKaijus) {
     const baseDef = MOVES[moveName];
     if (!baseDef) return;
     let def = baseDef;
@@ -227,6 +270,9 @@
         recovery: Math.max(5, Math.round(baseDef.recovery * m)),
         chainWindow: Math.max(4, Math.round(baseDef.chainWindow * m))
       });
+    }
+    if (k.stats.reachBonus && (moveName === 'light1' || moveName === 'light2' || moveName === 'light3' || moveName === 'grab')) {
+      def = Object.assign({}, def, { reach: (def.reach || 1.5) + k.stats.reachBonus });
     }
     k.state = moveName;
     k.stateTick = 0;
@@ -245,6 +291,9 @@
           k.dirY = wd.y;
         }
       }
+    }
+    if (!grabSlam && (moveName === 'light1' || moveName === 'heavy' || moveName === 'grab')) {
+      autoFaceOpponent(k, intent, allKaijus, 4.5);
     }
 
     k.attack = {
@@ -270,7 +319,7 @@
     Snd.sfx.whoosh();
   }
 
-  function startDodge(k, intent) {
+  function startDodge(k, intent, city) {
     let dx = k.dirX;
     let dy = k.dirY;
     if (intent && (intent.moveX !== 0 || intent.moveY !== 0)) {
@@ -286,8 +335,11 @@
     k.stateTick = 0;
     k.dodgeCooldown = DODGE_COOLDOWN;
     k.attack = null;
-    k.vx = dx * k.stats.speed * 2.35;
-    k.vy = dy * k.stats.speed * 2.35;
+    const dodgeSpd = isNearCornerOrWall(k, city, 2.5)
+      ? Math.max(k.stats.speed * 2.5, 7.8)
+      : (k.stats.speed * 2.35);
+    k.vx = dx * dodgeSpd;
+    k.vy = dy * dodgeSpd;
     Snd.sfx.dodge();
   }
 
@@ -376,7 +428,7 @@
     return false;
   }
 
-  function startSpecial(k, intent, cctx) {
+  function startSpecial(k, intent, cctx, allKaijus) {
     const def = k.stats.specials && k.stats.specials.special;
     if (!def) return false;
     const cost = def.cost || 35;
@@ -397,6 +449,7 @@
         k.dirY = wd.y;
       }
     }
+    autoFaceOpponent(k, intent, allKaijus, 4.5);
     k.fuel = Math.max(0, k.fuel - cost);
     k.overcharged = k.fuel >= 80;
     k.specialCooldown = def.cooldownTicks || 90;
@@ -812,6 +865,166 @@
           k.state = 'idle';
           k.stateTick = 0;
         }
+      } else if (def.kind === 'wave') {
+        // Octopulus Rex: Tidal Surge (wide knockback wave + slow + extinguishes burn)
+        const startEnd = def.startupTicks || 10;
+        const total = startEnd + (def.durationTicks || 18) + (def.recoveryTicks || 14);
+        if (k.stateTick < startEnd) {
+          sp.phase = 'startup';
+        } else if (k.stateTick === startEnd) {
+          sp.phase = 'active';
+          k.burnTicks = 0;
+          const rad = def.radius || 3.1;
+          const waveDmg = Math.round((def.dmg || 36) * pwr);
+          if (cctx && !cctx.headless) {
+            cctx.novaWaves.push({ x: k.x + k.dirX * 0.6, y: k.y + k.dirY * 0.6, z: k.z + 8, radius: rad, life: 22, maxLife: 22, color: '#2ec4b6' });
+          }
+          Snd.sfx.splash();
+          addSpark(cctx, k.x + k.dirX * 0.9, k.y + k.dirY * 0.9, k.z + 36, '#2ec4b6', 54);
+          if (cam) cam.shakeAmp = Math.max(cam.shakeAmp, 10);
+          if (allKaijus) {
+            for (let i = 0; i < allKaijus.length; i++) {
+              const t = allKaijus[i];
+              if (!t || t.id === k.id || t.hp <= 0 || isInvulnerable(t)) continue;
+              const dx = t.x - k.x;
+              const dy = t.y - k.y;
+              const d = Math.hypot(dx, dy);
+              if (d <= rad + t.r) {
+                const actual = Math.max(1, Math.round(waveDmg * t.stats.defense));
+                t.hp = Math.max(0, t.hp - actual);
+                t.hitFlash = 6;
+                t.cloudSlowTicks = Math.max(t.cloudSlowTicks || 0, 120);
+                t.inkSlowMult = 0.72;
+                const kn = U.vec2.norm(dx || k.dirX, dy || k.dirY);
+                const kb = (def.knockback || 10.5) / t.stats.weight;
+                t.vx = kn.x * kb;
+                t.vy = kn.y * kb;
+                t.vz = 3.2;
+                t.grounded = false;
+                t.state = 'hitstun';
+                t.stunTicks = 20;
+                t.stateTick = 0;
+                addPopup(cctx, t.x, t.y, t.z + 98, 'TIDAL SURGE! -' + actual, '#2ec4b6', 1.15);
+              }
+            }
+          }
+          if (city && city.buildings) {
+            const E = KB.Entities;
+            for (let i = 0; i < city.buildings.length; i++) {
+              const b = city.buildings[i];
+              if (b.state === 'rubble') continue;
+              const box = E.getBuildingCollBox(b);
+              const cx = U.clamp(k.x, box.x0, box.x1);
+              const cy = U.clamp(k.y, box.y0, box.y1);
+              if (Math.hypot(k.x - cx, k.y - cy) <= rad) {
+                damageBuilding(b, Math.round(waveDmg * 1.5), city, cctx, k.isPlayer ? k : null, allKaijus, cam);
+              }
+            }
+          }
+        } else if (k.stateTick < total) {
+          sp.phase = 'recovery';
+        } else {
+          k.special = null;
+          k.state = 'idle';
+          k.stateTick = 0;
+        }
+      } else if (def.kind === 'gravity_well') {
+        // Brain Fiend: Gravity Well (lifts nearby ground props & hurls them at enemy, or fires psi boulder)
+        const startEnd = def.startupTicks || 12;
+        const total = startEnd + (def.durationTicks || 16) + (def.recoveryTicks || 14);
+        if (k.stateTick < startEnd) {
+          sp.phase = 'startup';
+          if (!sp.liftedProps && cctx && cctx.props) {
+            sp.liftedProps = [];
+            const maxR = def.pullRadius || 4.2;
+            for (let i = 0; i < cctx.props.length && sp.liftedProps.length < 2; i++) {
+              const pr = cctx.props[i];
+              if (!pr || pr.state !== 'ground') continue;
+              if (Math.hypot(pr.x - k.x, pr.y - k.y) <= maxR) {
+                pr.state = 'carried';
+                pr.ownerId = k.id;
+                sp.liftedProps.push(pr);
+              }
+            }
+          }
+          if (sp.liftedProps) {
+            for (let i = 0; i < sp.liftedProps.length; i++) {
+              const pr = sp.liftedProps[i];
+              const off = i === 0 ? -0.45 : 0.45;
+              pr.x = U.lerp(pr.x, k.x - k.dirY * off, 0.25);
+              pr.y = U.lerp(pr.y, k.y + k.dirX * off, 0.25);
+              pr.z = U.lerp(pr.z, k.z + 64, 0.28);
+              KB.Entities.syncPropBounds(pr);
+            }
+          }
+        } else if (k.stateTick === startEnd) {
+          sp.phase = 'active';
+          const nearest = findNearestOpponent(k, allKaijus);
+          let aimX = k.dirX;
+          let aimY = k.dirY;
+          if (nearest) {
+            const toO = U.vec2.norm(nearest.opp.x - k.x, nearest.opp.y - k.y);
+            aimX = toO.x;
+            aimY = toO.y;
+            k.dirX = aimX;
+            k.dirY = aimY;
+          }
+          const spd = (def.speed || 18.0) * (k.stats.throwMult || 1.0);
+          if (sp.liftedProps && sp.liftedProps.length > 0) {
+            for (let i = 0; i < sp.liftedProps.length; i++) {
+              const pr = sp.liftedProps[i];
+              const spread = sp.liftedProps.length > 1 ? (i === 0 ? -0.08 : 0.08) : 0;
+              const ca = Math.cos(spread);
+              const sa = Math.sin(spread);
+              const vx = (aimX * ca - aimY * sa) * spd;
+              const vy = (aimX * sa + aimY * ca) * spd;
+              pr.state = 'thrown';
+              pr.ownerId = k.id;
+              pr.ownerPower = pwr;
+              pr.ownerIsPlayer = k.isPlayer;
+              pr.x = k.x + aimX * (k.r + pr.r + 0.15);
+              pr.y = k.y + aimY * (k.r + pr.r + 0.15);
+              pr.z = k.z + 54;
+              pr.vx = vx;
+              pr.vy = vy;
+              pr.vz = 3.6;
+              pr.hitSet = new Set([k.id]);
+              pr.hurlDmgOverride = Math.round((def.dmg || 48) * (sp.liftedProps.length > 1 ? 0.68 : 1.0));
+              KB.Entities.syncPropBounds(pr);
+            }
+            sp.liftedProps = null;
+          } else {
+            spawnProjectile(cctx, {
+              kind: 'chunk',
+              ownerId: k.id,
+              ownerIsPlayer: k.isPlayer,
+              ownerRef: k,
+              x: k.x + aimX * (k.r + 0.45),
+              y: k.y + aimY * (k.r + 0.45),
+              z: k.z + 44,
+              vx: aimX * spd,
+              vy: aimY * spd,
+              vz: 2.2,
+              gravity: 0.26,
+              r: 0.54,
+              dmg: Math.round((def.dmg || 48) * pwr),
+              buildingMult: 1.5,
+              knockback: 7.5,
+              pierceLeft: 1,
+              life: 80,
+              color: '#ff4f8b'
+            });
+          }
+          Snd.sfx.throwProp();
+          addSpark(cctx, k.x + aimX * 0.8, k.y + aimY * 0.8, k.z + 56, '#ff4f8b', 42);
+          if (cam) cam.shakeAmp = Math.max(cam.shakeAmp, 8);
+        } else if (k.stateTick < total) {
+          sp.phase = 'recovery';
+        } else {
+          k.special = null;
+          k.state = 'idle';
+          k.stateTick = 0;
+        }
       } else {
         const total = (def.startupTicks || 10) + (def.durationTicks || 18) + (def.recoveryTicks || 12);
         if (k.stateTick >= total) {
@@ -938,8 +1151,13 @@
       }
       if (k.stateTick <= cTicks + dTicks) {
         sp.phase = 'active';
-        k.z = U.lerp(k.z, 26, 0.25);
-        k.grounded = false;
+        if (def.tentacleBarrage) {
+          k.z = 0;
+          k.grounded = true;
+        } else {
+          k.z = U.lerp(k.z, 26, 0.25);
+          k.grounded = false;
+        }
         if (intent && (intent.moveX !== 0 || intent.moveY !== 0)) {
           const wd = KB.Iso.screenDirToWorld(intent.moveX, intent.moveY);
           const spMove = k.stats.speed * 0.65;
@@ -1109,10 +1327,11 @@
       }
 
       if (cctx && cctx.props) {
+        const detRad = def.chainDetonateRadius || rad;
         for (let i = cctx.props.length - 1; i >= 0; i--) {
           const p = cctx.props[i];
           if (!p || !p.def.explodes || p._detonated || p.state === 'carried') continue;
-          if (Math.hypot(p.x - k.x, p.y - k.y) <= rad) {
+          if (Math.hypot(p.x - k.x, p.y - k.y) <= detRad) {
             p.state = 'fusing';
             p.fuseTicks = 4;
           }
@@ -1122,16 +1341,20 @@
       if (city && city.buildings) {
         const E = KB.Entities;
         const flattenTypes = def.instantFlattenTypes || [];
+        const detRad = def.chainDetonateRadius || 0;
         for (let i = 0; i < city.buildings.length; i++) {
           const b = city.buildings[i];
           if (b.state === 'rubble') continue;
           const box = E.getBuildingCollBox(b);
           const cx = U.clamp(k.x, box.x0, box.x1);
           const cy = U.clamp(k.y, box.y0, box.y1);
-          if (Math.hypot(k.x - cx, k.y - cy) <= rad) {
+          const distB = Math.hypot(k.x - cx, k.y - cy);
+          if (distB <= rad) {
             const flat = flattenTypes.indexOf(b.type) !== -1;
             const bDmg = flat ? (b.hp + 100) : Math.round(blastDmg * 2);
             damageBuilding(b, bDmg, city, cctx, k.isPlayer ? k : null, allKaijus, cam);
+          } else if (detRad > rad && b.explodes && distB <= detRad) {
+            damageBuilding(b, b.hp + 50, city, cctx, k.isPlayer ? k : null, allKaijus, cam);
           }
         }
       }
@@ -1309,11 +1532,64 @@
     KB.Entities.syncKaijuBounds(k);
   }
 
+  function isNearCornerOrWall(k, city, threshold) {
+    if (!k || !city) return false;
+    const thr = threshold || 1.5;
+    if (k.x <= thr || k.x >= city.cols - thr || k.y <= thr || k.y >= city.rows - thr) {
+      return true;
+    }
+    const blds = city.buildings || [];
+    const E = KB.Entities;
+    for (let i = 0; i < blds.length; i++) {
+      const b = blds[i];
+      if (!b || b.state === 'rubble' || k.z >= b.zTop - 10) continue;
+      const box = E.getBuildingCollBox(b);
+      const cx = U.clamp(k.x, box.x0, box.x1);
+      const cy = U.clamp(k.y, box.y0, box.y1);
+      if (Math.hypot(k.x - cx, k.y - cy) <= thr) return true;
+    }
+    return false;
+  }
+
+  function triggerGetupShockwave(k, city, cctx, kaijus, cam) {
+    if (!k) return;
+    const E = KB.Entities;
+    const radius = 1.2;
+    const pushDist = 0.8;
+    Snd.sfx.stomp();
+    addSpark(cctx, k.x, k.y, k.z + 18, '#ffd23f', 36);
+    addPopup(cctx, k.x, k.y, k.z + 88, 'GETUP WAVE!', '#ffd23f', 1.0);
+    if (cam) cam.shakeAmp = Math.max(cam.shakeAmp, 5);
+
+    const list = kaijus || [];
+    for (let i = 0; i < list.length; i++) {
+      const opp = list[i];
+      if (!opp || opp.id === k.id || opp.hp <= 0) continue;
+      if (Math.abs(opp.z - k.z) > 65) continue;
+      const dx = opp.x - k.x;
+      const dy = opp.y - k.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist <= radius) {
+        const dir = dist > 1e-4 ? { x: dx / dist, y: dy / dist } : { x: Math.SQRT1_2, y: Math.SQRT1_2 };
+        opp.x += dir.x * pushDist;
+        opp.y += dir.y * pushDist;
+        if (city && E) {
+          if (E.clampToArenaBounds) E.clampToArenaBounds(opp, city);
+          if (E.resolveBuildingCollisions) E.resolveBuildingCollisions(opp, city.buildings);
+          if (E.clampToArenaBounds) E.clampToArenaBounds(opp, city);
+          E.syncKaijuBounds(opp);
+        }
+        addSpark(cctx, opp.x, opp.y, opp.z + 32, '#5ee6ff', 22);
+      }
+    }
+  }
+
   /* Update combat state machine + movement integration for one kaiju (60 Hz tick) */
   function updateFighter(k, intent, city, dt, cctx, allKaijus, cam) {
     if (k.hitFlash > 0) k.hitFlash--;
     if (k.dodgeCooldown > 0) k.dodgeCooldown--;
     if (k.counterWindow > 0) k.counterWindow--;
+    if (k.wakeupGraceTicks > 0) k.wakeupGraceTicks--;
     if (k.climbCooldown > 0) k.climbCooldown--;
     if (k.specialCooldown > 0) k.specialCooldown--;
     if (k.cloudSlowTicks > 0) k.cloudSlowTicks--;
@@ -1321,8 +1597,7 @@
 
     // Passive Atomic Fuel regen (+1.5/s baseline), Overcharge (>= 80), & Tin Colossus Battery (>= 50)
     if (k.hp > 0) {
-      k.fuel = Math.min(k.fuelMax, k.fuel + (k.stats.fuelRegen || 1.5) * dt);
-      k.overcharged = k.fuel >= 80;
+      grantFuel(k, (k.stats.fuelRegen || 1.5) * dt, city);
       k.batteryActive = !!(k.stats.batteryThreshold && k.fuel >= k.stats.batteryThreshold);
     } else {
       k.batteryActive = false;
@@ -1567,14 +1842,20 @@
           });
           Snd.sfx.throwProp();
           addSpark(cctx, k.x + k.dirX * 0.7, k.y + k.dirY * 0.7, k.z + 50, '#ffd23f', 26);
-        } else if (def.kind === 'slam' && !k.attack.shockwaveTriggered) {
+        } else if ((def.kind === 'slam' || def.kind === 'psi_slam') && !k.attack.shockwaveTriggered) {
           k.attack.shockwaveTriggered = true;
           Snd.sfx.stomp();
+          const wCol = def.kind === 'psi_slam' ? '#ff4f8b' : '#ff9a2e';
           if (cctx && !cctx.headless) {
-            cctx.novaWaves.push({ x: k.x, y: k.y, z: k.z + 4, radius: def.reach || 1.5, life: 16, maxLife: 16, color: '#ff9a2e' });
+            cctx.novaWaves.push({ x: k.x, y: k.y, z: k.z + 4, radius: def.reach || 1.5, life: 16, maxLife: 16, color: wCol });
           }
-          addSpark(cctx, k.x, k.y, k.z + 10, '#ff9a2e', 38);
+          addSpark(cctx, k.x, k.y, k.z + 10, wCol, 38);
           if (cam) cam.shakeAmp = Math.max(cam.shakeAmp, 8);
+        } else if (def.kind === 'ink_jet' && !k.attack.shockwaveTriggered) {
+          k.attack.shockwaveTriggered = true;
+          Snd.sfx.splash();
+          addSpark(cctx, k.x + k.dirX * 1.1, k.y + k.dirY * 1.1, k.z + 42, '#2ec4b6', 40);
+          addSpark(cctx, k.x + k.dirX * 1.4, k.y + k.dirY * 1.4, k.z + 36, '#1d3557', 34);
         }
       }
       if (k.state === 'heavy' && def.kind === 'rocket_fist') {
@@ -1640,8 +1921,19 @@
       k.stateTick++;
       k.vx *= 0.82;
       k.vy *= 0.82;
-      if (k.stateTick >= k.stunTicks && k.grounded) {
-        k.state = 'idle';
+      const canBreakCombo = (k.comboReceived || k.comboTaken || 0) >= 3;
+      if (intent.blockHeld && k.guard > 0 && canBreakCombo) {
+        k.state = 'block';
+        k.stateTick = 0;
+        k.blockTicks = 0;
+        k.comboReceived = 0;
+      } else if (k.stateTick >= k.stunTicks && k.grounded) {
+        if (intent.blockHeld && k.guard > 0) {
+          k.state = 'block';
+          k.blockTicks = 0;
+        } else {
+          k.state = 'idle';
+        }
         k.stateTick = 0;
         k.comboReceived = 0;
       }
@@ -1662,13 +1954,16 @@
       if (k.grounded && k.stateTick >= KNOCKDOWN_TICKS) {
         k.state = 'getup';
         k.stateTick = 0;
+        triggerGetupShockwave(k, city, cctx, allKaijus, cam);
       }
     } else if (k.state === 'getup') {
       k.stateTick++;
       k.vx *= 0.8;
       k.vy *= 0.8;
       if (k.stateTick >= GETUP_TICKS) {
-        k.state = 'idle';
+        k.wakeupGraceTicks = 12;
+        k.state = (intent.blockHeld && k.guard > 0) ? 'block' : 'idle';
+        if (k.state === 'block') k.blockTicks = 0;
         k.stateTick = 0;
         k.stagger = 0;
         k.comboReceived = 0;
@@ -1705,10 +2000,20 @@
       }
     }
 
-    if (k.grounded && canAct) {
+    const canActNow = k.state === 'idle' || k.state === 'walk' || k.state === 'block';
+    if (k.grounded && canActNow) {
+      if (intent.facePressed) {
+        if (k.isPlayer) In.consume('facePressed');
+        const nearest = findNearestOpponent(k, allKaijus);
+        if (nearest) {
+          const toOpp = U.vec2.norm(nearest.opp.x - k.x, nearest.opp.y - k.y);
+          k.dirX = toOpp.x;
+          k.dirY = toOpp.y;
+        }
+      }
       if (intent.dodgePressed && k.dodgeCooldown <= 0) {
         if (k.isPlayer) In.consume('dodgePressed');
-        startDodge(k, intent);
+        startDodge(k, intent, city);
       } else if (intent.blockHeld && k.guard > 0) {
         if (k.state !== 'block') {
           k.state = 'block';
@@ -1731,7 +2036,7 @@
           startUltimate(k, cctx);
         } else if (intent.specialPressed) {
           if (k.isPlayer) In.consume('specialPressed');
-          startSpecial(k, intent, cctx);
+          startSpecial(k, intent, cctx, allKaijus);
         } else if (intent.grab) {
           if (k.isPlayer) In.consume('grab');
           const nearProp = findNearestGroundProp(k, cctx);
@@ -1749,14 +2054,14 @@
             Snd.sfx.grab();
             addPopup(cctx, k.x, k.y, k.z + 100, nearProp.def.name.toUpperCase() + '!', '#ffd23f', 0.95);
           } else {
-            startAttack(k, 'grab', intent);
+            startAttack(k, 'grab', intent, allKaijus);
           }
         } else if (intent.heavy) {
           if (k.isPlayer) In.consume('heavy');
-          startAttack(k, 'heavy', intent);
+          startAttack(k, 'heavy', intent, allKaijus);
         } else if (intent.light) {
           if (k.isPlayer) In.consume('light');
-          startAttack(k, 'light1', intent);
+          startAttack(k, 'light1', intent, allKaijus);
         }
       }
     }
@@ -1932,6 +2237,26 @@
 
     // Check blocking
     if (defender.state === 'block') {
+      const applyCornerBlockPush = function () {
+        if (!isNearCornerOrWall(defender, city, 1.5)) return;
+        const rdx = attacker.x - defender.x;
+        const rdy = attacker.y - defender.y;
+        const rdist = Math.hypot(rdx, rdy);
+        const revDir = rdist > 1e-4 ? { x: rdx / rdist, y: rdy / rdist } : U.vec2.norm(-attacker.dirX || 0.7, -attacker.dirY || 0.7);
+        const revKb = ((def.knockback || 0.5) * 6.5 * 0.5) / (attacker.stats.weight || 1);
+        attacker.vx += revDir.x * revKb;
+        attacker.vy += revDir.y * revKb;
+        const pushStep = Math.min(0.35, revKb * 0.08);
+        attacker.x += revDir.x * pushStep;
+        attacker.y += revDir.y * pushStep;
+        if (city && KB.Entities && KB.Entities.clampToArenaBounds) {
+          KB.Entities.clampToArenaBounds(attacker, city);
+          KB.Entities.resolveBuildingCollisions(attacker, city.buildings);
+          KB.Entities.syncKaijuBounds(attacker);
+        }
+        addSpark(cctx, attacker.x, attacker.y, attacker.z + 40, '#5ee6ff', 18);
+      };
+
       const isPerfect = defender.blockTicks <= PERFECT_BLOCK_TICKS;
       if (isPerfect) {
         defender.fuel = Math.min(defender.fuelMax, defender.fuel + 10);
@@ -1941,6 +2266,7 @@
         attacker.attack = null;
         attacker.hitStop = 5;
         defender.hitStop = 5;
+        applyCornerBlockPush();
         Snd.sfx.perfectBlock();
         addSpark(cctx, mx, my, mz, '#7dff4f', 34);
         addPopup(cctx, defender.x, defender.y, defender.z + 105, 'PERFECT BLOCK! +10 FUEL', '#7dff4f', 1.1);
@@ -1963,7 +2289,9 @@
         if (cam) cam.shakeAmp = Math.max(cam.shakeAmp, 8);
         Snd.sfx.guardBreak();
         addPopup(cctx, defender.x, defender.y, defender.z + 105, 'GUARD BREAK! -' + blockedDmg, '#ff6b57', 1.2);
+        spawnComicCard(cctx, defender.x, defender.y, defender.z + 122, 'KRAK!', '#5ee6ff');
       } else {
+        applyCornerBlockPush();
         Snd.sfx.block();
         addPopup(cctx, defender.x, defender.y, defender.z + 95, 'BLOCKED -' + blockedDmg, '#5ee6ff', 0.95);
       }
@@ -1995,9 +2323,17 @@
       addPopup(cctx, attacker.x, attacker.y, attacker.z + 108, '+' + def.healOnHit + ' HP', '#7dff4f', 0.95);
     }
 
+    // Octopulus Rex: Ink Jet blinds and slows on hit
+    if (def.kind === 'ink_jet') {
+      defender.blindedTicks = Math.max(defender.blindedTicks || 0, def.blindTicks || 150);
+      defender.cloudSlowTicks = Math.max(defender.cloudSlowTicks || 0, def.slowTicks || 180);
+      defender.inkSlowMult = def.slowMult || 0.7;
+      addPopup(cctx, defender.x, defender.y, defender.z + 114, 'INK BLIND! 0.7x SPD', '#2ec4b6', 1.0);
+    }
+
     // Fuel gain
-    attacker.fuel = Math.min(attacker.fuelMax, attacker.fuel + def.fuelGain);
-    defender.fuel = Math.min(defender.fuelMax, defender.fuel + 2);
+    grantFuel(attacker, def.fuelGain, city);
+    grantFuel(defender, 2, city);
 
     // Hit-stop & camera shake
     attacker.hitStop = def.hitStop;
@@ -2080,6 +2416,7 @@
       Snd.sfx.knockdown();
       addSpark(cctx, mx, my, mz, '#ff6b57', 38);
       addPopup(cctx, defender.x, defender.y, defender.z + 105, (counterMult > 1 ? 'COUNTER! ' : '') + '-' + finalDmg + '!', '#ff6b57', 1.2);
+      spawnComicCard(cctx, mx, my, mz + 36, atk.name === 'heavy' ? 'KRAK!' : 'BIFF!', '#ff6b57');
     } else {
       defender.state = 'hitstun';
       defender.stateTick = 0;
@@ -2087,8 +2424,12 @@
       defender.stunTicks = Math.max(8, baseStun - (defender.comboReceived - 1) * 2);
       defender.vx = kn.x * kbForce;
       defender.vy = kn.y * kbForce;
-      if (atk.name === 'heavy' || atk.name === 'jump_atk') Snd.sfx.heavyHit();
-      else Snd.sfx.lightHit();
+      if (atk.name === 'heavy' || atk.name === 'jump_atk') {
+        Snd.sfx.heavyHit();
+        spawnComicCard(cctx, mx, my, mz + 34, atk.name === 'heavy' ? 'BIFF!' : 'CRUNCH!', '#ffd23f');
+      } else {
+        Snd.sfx.lightHit();
+      }
       addSpark(cctx, mx, my, mz, counterMult > 1 ? '#5ee6ff' : '#ffd23f', atk.name === 'heavy' ? 36 : 26);
       addPopup(
         cctx,
@@ -2112,7 +2453,7 @@
     const dy = cy + Math.sin(ang) * dist;
     if (dropType === 'health' || dropType === 'fuel') {
       E.spawnPickup(cctx, dropType, dx, dy, city);
-    } else if (dropType === 'girder' || dropType === 'tanker') {
+    } else if (E.PROP_DEFS && E.PROP_DEFS[dropType]) {
       E.spawnPropDrop(cctx, dropType, dx, dy, city);
     }
   }
@@ -2155,6 +2496,7 @@
     addSpark(cctx, ex, ey, 36, '#ff6b57', 64);
     addSpark(cctx, ex, ey, 50, '#ffd23f', 44);
     addPopup(cctx, ex, ey, 85, 'KABOOM! -' + dmg, '#ff6b57', 1.25);
+    spawnComicCard(cctx, ex, ey, 72, 'KA-BOOM!', '#ff6b57');
     if (cam) cam.shakeAmp = Math.max(cam.shakeAmp, 14);
 
     let enemiesCaught = 0;
@@ -2270,15 +2612,75 @@
       E.spawnCivilians(cctx, b, b.isLandmark ? 6 : 3, city);
       if (cam) cam.shakeAmp = Math.max(cam.shakeAmp, 10);
       addPopup(cctx, cx, cy, 48, 'WRECKED!', '#ff6b57', 1.15);
+      spawnComicCard(cctx, cx, cy, 74, b.isLandmark ? 'SKREEE!' : 'CRUNCH!', '#ff9a2e');
+
+      // Reactive street vehicles: nearby ground cars/taxis/jeeps jolt away from crumbling buildings
+      if (cctx && cctx.props && city) {
+        for (let vp = 0; vp < cctx.props.length; vp++) {
+          const pr = cctx.props[vp];
+          if (!pr || pr.state !== 'ground') continue;
+          if (pr.propType !== 'car' && pr.propType !== 'taxi' && pr.propType !== 'jeep') continue;
+          const vdx = pr.x - cx;
+          const vdy = pr.y - cy;
+          const vdist = Math.hypot(vdx, vdy);
+          if (vdist > 0.05 && vdist <= 2.8) {
+            pr.x = U.clamp(pr.x + (vdx / vdist) * 0.45, 0.6, city.cols - 0.6);
+            pr.y = U.clamp(pr.y + (vdy / vdist) * 0.45, 0.6, city.rows - 0.6);
+            pr.rot = (pr.rot || 0) + (vp % 2 === 0 ? 0.25 : -0.25);
+            E.syncPropBounds(pr);
+          }
+        }
+      }
 
       rollAndSpawnBuildingLoot(b, 'rubble', cx, cy, b.lootRolls || 1, city, cctx, playerRef);
       if (b.guaranteedGirder) {
         spawnLootDrop(cctx, 'girder', cx, cy, city, 5);
+      } else if (!b.explodes && !b.floods && !b.scatterCars) {
+        // Guarantee at least 1 archetype-matched throwable prop on every building collapse
+        let archProp = 'car';
+        if (b.type === 'silo') {
+          archProp = 'tanker';
+        } else if (b.type === 'office' || b.type === 'tower' || b.type === 'bunker' || b.type === 'theater' || b.type === 'radar_dish' || b.type === 'landmark') {
+          archProp = 'girder';
+        } else {
+          archProp = (b.id % 2 === 0) ? 'car' : 'lamp';
+        }
+        const spawnedP = E.spawnProp(cctx, archProp, cx + 0.32, cy - 0.28, city);
+        if (spawnedP && archProp === 'tanker') spawnedP.spawnGrace = 15;
       }
       if (b.guaranteedHealth) {
         for (let h = 0; h < b.guaranteedHealth; h++) {
           spawnLootDrop(cctx, 'health', cx, cy, city, 7 + h);
         }
+      }
+      if (b.guaranteedFuel) {
+        for (let f = 0; f < b.guaranteedFuel; f++) {
+          spawnLootDrop(cctx, 'fuel', cx, cy, city, 11 + f);
+        }
+      }
+      if (b.scatterCars) {
+        const offsets = [[-1.1, 1.0], [0.9, 1.2], [-0.2, 1.4]];
+        for (let sc = 0; sc < offsets.length; sc++) {
+          const cp = E.spawnProp(cctx, 'car', cx + offsets[sc][0], cy + offsets[sc][1], city);
+          if (cp) {
+            cp.rot = (sc - 1) * 0.45;
+            addSpark(cctx, cp.x, cp.y, 14, '#ffd23f', 12);
+          }
+        }
+        addPopup(cctx, cx, cy, 72, 'CARS SCATTERED!', '#ffd23f', 1.08);
+      }
+      if (b.overchargeAuraSec && playerRef) {
+        playerRef.overchargeAuraTicks = Math.max(playerRef.overchargeAuraTicks || 0, Math.round(b.overchargeAuraSec * 60));
+        addSpark(cctx, playerRef.x, playerRef.y, 44, '#7dff4f', 28);
+        addPopup(cctx, cx, cy, 78, 'OVERCHARGE! ' + b.overchargeAuraSec + 's', '#7dff4f', 1.18);
+        spawnComicCard(cctx, cx, cy, 72, 'OVERCHARGE!', '#7dff4f');
+      }
+      if (b.meltdownFuelBoost && playerRef) {
+        playerRef.fuel = Math.min(playerRef.fuelMax, playerRef.fuel + b.meltdownFuelBoost);
+        playerRef.overcharged = playerRef.fuel >= 80;
+        addSpark(cctx, playerRef.x, playerRef.y, 44, '#7dff4f', 28);
+        addPopup(cctx, cx, cy, 78, '+' + b.meltdownFuelBoost + ' MELTDOWN FUEL!', '#7dff4f', 1.18);
+        spawnComicCard(cctx, cx, cy, 72, 'MELTDOWN BOOST!', '#7dff4f');
       }
       if (b.explodes && !b.exploded) {
         b.exploded = true;
@@ -2801,6 +3203,159 @@
     }
   }
 
+  function updateCityHazards(city, cctx, kaijus, playerRef, cam, dt) {
+    if (!city || !city.hazard || city.hazard.kind === 'none') return;
+    const h = city.hazard;
+
+    if (h.kind === 'siren') {
+      if (h.boostTimer > 0) h.boostTimer = Math.max(0, h.boostTimer - dt);
+      city.sirenBoostTimer = h.boostTimer;
+      if (h.flashTimer > 0) h.flashTimer = Math.max(0, h.flashTimer - dt);
+      if (h.waveTimer > 0) h.waveTimer = Math.max(0, h.waveTimer - dt);
+
+      h.timer += dt;
+      if (!h.telegraphed && h.timer >= h.interval - h.warnLead) {
+        h.telegraphed = true;
+        if (Snd.sfx && Snd.sfx.dodge) Snd.sfx.dodge();
+        addPopup(cctx, city.cols * 0.5, city.rows * 0.5, 95, 'ATOMIC SIREN!', '#ffb36b', 1.25);
+      }
+      if (h.timer >= h.interval) {
+        h.timer -= h.interval;
+        h.telegraphed = false;
+        h.boostTimer = 8.0;
+        city.sirenBoostTimer = 8.0;
+        h.flashTimer = 0.4;
+        h.waveTimer = 1.2;
+        h.pulseCount = (h.pulseCount || 0) + 1;
+        if (Snd.sfx && Snd.sfx.special) Snd.sfx.special();
+        if (cam) cam.shakeAmp = Math.max(cam.shakeAmp, 8);
+        addPopup(cctx, city.cols * 0.5, city.rows * 0.5, 112, 'RADIATION SURGE! 1.5x FUEL', '#7dff4f', 1.3);
+        spawnComicCard(cctx, city.cols * 0.5, city.rows * 0.5, 96, 'RADIATION SURGE!', '#7dff4f');
+      }
+      return;
+    }
+
+    if (h.kind === 'train') {
+      if (h.state === 'idle') {
+        h.timer += dt;
+        if (h.timer >= h.interval - h.warnLead) {
+          h.state = 'warning';
+          if (Snd.sfx && Snd.sfx.heavy) Snd.sfx.heavy();
+          addPopup(cctx, city.cols * 0.5, (h.trackY0 + h.trackY1) * 0.5, 76, 'TRAIN APPROACHING!', '#ffd23f', 1.25);
+        }
+      } else if (h.state === 'warning') {
+        h.timer += dt;
+        if (h.timer >= h.interval) {
+          h.state = 'crossing';
+          h.timer -= h.interval;
+          h.trainX = -h.trainLen * 0.6;
+          h.hitIds = [];
+          h.passCount = (h.passCount || 0) + 1;
+          if (Snd.sfx && Snd.sfx.special) Snd.sfx.special();
+          if (cam) cam.shakeAmp = Math.max(cam.shakeAmp, 6);
+          spawnComicCard(cctx, city.cols * 0.5, (h.trackY0 + h.trackY1) * 0.5, 74, 'EXPRESS TRAIN!', '#ffd23f');
+        }
+      } else if (h.state === 'crossing') {
+        h.trainX += h.trainSpeed * dt;
+        const tx0 = h.trainX - h.trainLen * 0.5;
+        const tx1 = h.trainX + h.trainLen * 0.5;
+        const list = kaijus || [];
+        for (let i = 0; i < list.length; i++) {
+          const k = list[i];
+          if (!k || k.hp <= 0 || k.z > 55) continue;
+          const kKey = 'k_' + k.id;
+          if (h.hitIds.indexOf(kKey) !== -1) continue;
+          if (k.x + k.r >= tx0 && k.x - k.r <= tx1 && k.y + k.r >= h.trackY0 && k.y - k.r <= h.trackY1) {
+            h.hitIds.push(kKey);
+            k.hp = Math.max(0, k.hp - 30);
+            k.hitFlash = 6;
+            k.stagger = Math.max(k.stagger || 0, 14);
+            k.vy = 6.5;
+            k.vz = 5.5;
+            k.grounded = false;
+            if (Snd.sfx && Snd.sfx.hitHeavy) Snd.sfx.hitHeavy();
+            addSpark(cctx, k.x, k.y, k.z + 40, '#ffd23f', 24);
+            addPopup(cctx, k.x, k.y, k.z + 86, '-30 TRAIN!', '#ff6b57', 1.2);
+            if (cam) cam.shakeAmp = Math.max(cam.shakeAmp, 9);
+          }
+        }
+        const blds = city.buildings || [];
+        const E = KB.Entities;
+        for (let i = 0; i < blds.length; i++) {
+          const b = blds[i];
+          const bKey = 'b_' + b.id;
+          if (!b || b.state === 'rubble' || h.hitIds.indexOf(bKey) !== -1) continue;
+          const box = E.getBuildingCollBox(b);
+          if (box.x1 >= tx0 && box.x0 <= tx1 && box.y1 >= h.trackY0 && box.y0 <= h.trackY1) {
+            h.hitIds.push(bKey);
+            damageBuilding(b, 45, city, cctx, playerRef, kaijus, cam);
+          }
+        }
+        if (h.trainX - h.trainLen * 0.5 > city.cols + 1.5) {
+          h.state = 'idle';
+          h.hitIds = [];
+        }
+      }
+      return;
+    }
+
+    if (h.kind === 'fissure') {
+      if (h.activeTimer > 0) h.activeTimer = Math.max(0, h.activeTimer - dt);
+      h.timer += dt;
+      if (!h.telegraphed && h.timer >= h.interval - h.warnLead) {
+        h.telegraphed = true;
+        if (Snd.sfx && Snd.sfx.heavy) Snd.sfx.heavy();
+        addPopup(cctx, city.cols * 0.5, city.rows * 0.5, 92, 'MAGMA FISSURE!', '#ff9a2e', 1.25);
+      }
+      if (h.timer >= h.interval) {
+        h.timer -= h.interval;
+        h.telegraphed = false;
+        h.activeTimer = 1.4;
+        h.eruptCount = (h.eruptCount || 0) + 1;
+        const vents = h.vents || [{ x: 11.0, y: 2.6 }, { x: 19.2, y: 11.0 }, { x: 11.0, y: 19.2 }];
+        const E = KB.Entities;
+        for (let i = 0; i < 2; i++) {
+          const v = vents[(h.eruptCount + i) % vents.length];
+          triggerExplosion(v.x, v.y, 1.6, 28, city, cctx, playerRef, kaijus, cam, { burnSec: 2 });
+          if (E && E.spawnProp) {
+            const bp = E.spawnProp(cctx, 'boulder', v.x + (i === 0 ? -0.8 : 0.8), v.y + (i === 0 ? 0.8 : -0.8), city);
+            if (bp) {
+              bp.vz = 5.2;
+              bp.z = 8;
+            }
+          }
+        }
+        spawnComicCard(cctx, city.cols * 0.5, city.rows * 0.5, 96, 'ERUPTION!', '#ff9a2e');
+      }
+      return;
+    }
+
+    if (h.kind === 'broadside') {
+      if (h.activeTimer > 0) h.activeTimer = Math.max(0, h.activeTimer - dt);
+      h.timer += dt;
+      if (!h.telegraphed && h.timer >= h.interval - h.warnLead) {
+        h.telegraphed = true;
+        if (Snd.sfx && Snd.sfx.heavy) Snd.sfx.heavy();
+        addPopup(cctx, city.cols * 0.5, city.rows - 2.4, 86, 'DESTROYER BROADSIDE!', '#ff6b57', 1.25);
+      }
+      if (h.timer >= h.interval) {
+        h.timer -= h.interval;
+        h.telegraphed = false;
+        h.activeTimer = 1.2;
+        h.salvoCount = (h.salvoCount || 0) + 1;
+        const targets = h.targets || [{ x: 6.5, y: 13.8 }, { x: 12.0, y: 13.8 }, { x: 17.2, y: 13.8 }];
+        for (let i = 0; i < targets.length; i++) {
+          const t = targets[i];
+          triggerExplosion(t.x, t.y, 1.7, 30, city, cctx, playerRef, kaijus, cam, { burnSec: 1.5 });
+        }
+        if (KB.Entities && KB.Entities.spawnProp) {
+          KB.Entities.spawnProp(cctx, (h.salvoCount % 2 === 0) ? 'container' : 'girder', 12.0, 12.2, city);
+        }
+        spawnComicCard(cctx, city.cols * 0.5, city.rows - 2.4, 92, 'BROADSIDE!', '#ff6b57');
+      }
+    }
+  }
+
   KB.Combat = {
     MOVES: MOVES,
     DODGE_TOTAL: DODGE_TOTAL,
@@ -2813,6 +3368,7 @@
     resolveBuildingMelee: resolveBuildingMelee,
     triggerLandingStomp: triggerLandingStomp,
     updateProps: updateProps,
+    updateCityHazards: updateCityHazards,
     addPopup: addPopup,
     detonateProp: detonateProp,
     damageBuilding: damageBuilding,

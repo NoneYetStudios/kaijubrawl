@@ -1,0 +1,12 @@
+# Internal helpers are not web endpoints: only leaderboard.php and submit_score.php are public.
+<IfModule mod_authz_core.c>
+  <FilesMatch "^(db|seed_dev)\.php$">
+    Require all denied
+  </FilesMatch>
+</IfModule>
+<IfModule !mod_authz_core.c>
+  <FilesMatch "^(db|seed_dev)\.php$">
+    Order allow,deny
+    Deny from all
+  </FilesMatch>
+</IfModule>

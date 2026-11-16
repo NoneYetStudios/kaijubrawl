@@ -13,6 +13,31 @@
     originX: 0,
     originY: 0
   };
+  let grainTile = null;
+  let grainPattern = null;
+
+  function ensureGrainTile() {
+    if (grainTile) return grainTile;
+    if (typeof document === 'undefined' || !document.createElement) return null;
+    const c = document.createElement('canvas');
+    c.width = 128;
+    c.height = 128;
+    const g = c.getContext('2d');
+    if (!g) return null;
+    const rand = U.rng(1954);
+    for (let y = 0; y < 128; y += 2) {
+      for (let x = 0; x < 128; x += 2) {
+        const v = rand();
+        if (v > 0.62) {
+          g.fillStyle = v > 0.84 ? 'rgba(255,244,214,0.45)' : 'rgba(20,16,12,0.55)';
+          g.fillRect(x, y, 2, 2);
+        }
+      }
+    }
+    grainTile = c;
+    grainPattern = null;
+    return grainTile;
+  }
 
   function shadeHex(col, amt) {
     let r, g, b;
@@ -71,29 +96,81 @@
     const pal = city.palette;
     const rand = U.rng(1954);
 
-    // Arena foundation / slab rim
-    const pE = Iso.worldToScreen(cols, 0, 0);
-    const pS = Iso.worldToScreen(cols, rows, 0);
-    const pW = Iso.worldToScreen(0, rows, 0);
+    // Arena foundation / slab rim (supports octagonal bevels)
+    const bev = (city.bevel && city.bevel >= 2.0) ? city.bevel : 0;
     const rim = 16;
 
-    g.fillStyle = shadeHex(pal.curb, -18);
-    g.beginPath();
-    g.moveTo(pW.sx + ox, pW.sy + oy);
-    g.lineTo(pS.sx + ox, pS.sy + oy);
-    g.lineTo(pS.sx + ox, pS.sy + oy + rim);
-    g.lineTo(pW.sx + ox, pW.sy + oy + rim);
-    g.closePath();
-    g.fill();
+    function traceArenaPolygon(ctx) {
+      ctx.beginPath();
+      if (bev > 0) {
+        const pts = [
+          Iso.worldToScreen(bev, 0, 0),
+          Iso.worldToScreen(cols - bev, 0, 0),
+          Iso.worldToScreen(cols, bev, 0),
+          Iso.worldToScreen(cols, rows - bev, 0),
+          Iso.worldToScreen(cols - bev, rows, 0),
+          Iso.worldToScreen(bev, rows, 0),
+          Iso.worldToScreen(0, rows - bev, 0),
+          Iso.worldToScreen(0, bev, 0)
+        ];
+        ctx.moveTo(pts[0].sx + ox, pts[0].sy + oy);
+        for (let i = 1; i < pts.length; i++) {
+          ctx.lineTo(pts[i].sx + ox, pts[i].sy + oy);
+        }
+        ctx.closePath();
+      } else {
+        traceTile(ctx, 0, 0, cols, rows, ox, oy);
+      }
+    }
 
-    g.fillStyle = shadeHex(pal.curb, -32);
-    g.beginPath();
-    g.moveTo(pS.sx + ox, pS.sy + oy);
-    g.lineTo(pE.sx + ox, pE.sy + oy);
-    g.lineTo(pE.sx + ox, pE.sy + oy + rim);
-    g.lineTo(pS.sx + ox, pS.sy + oy + rim);
-    g.closePath();
-    g.fill();
+    if (bev > 0) {
+      const sPts = [
+        Iso.worldToScreen(0, bev, 0),
+        Iso.worldToScreen(0, rows - bev, 0),
+        Iso.worldToScreen(bev, rows, 0),
+        Iso.worldToScreen(cols - bev, rows, 0),
+        Iso.worldToScreen(cols, rows - bev, 0),
+        Iso.worldToScreen(cols, bev, 0)
+      ];
+      for (let s = 0; s < sPts.length - 1; s++) {
+        const a = sPts[s];
+        const b = sPts[s + 1];
+        g.fillStyle = shadeHex(pal.curb, s < 2 ? -18 : (s === 2 ? -24 : -32));
+        g.beginPath();
+        g.moveTo(a.sx + ox, a.sy + oy);
+        g.lineTo(b.sx + ox, b.sy + oy);
+        g.lineTo(b.sx + ox, b.sy + oy + rim);
+        g.lineTo(a.sx + ox, a.sy + oy + rim);
+        g.closePath();
+        g.fill();
+      }
+    } else {
+      const pE = Iso.worldToScreen(cols, 0, 0);
+      const pS = Iso.worldToScreen(cols, rows, 0);
+      const pW = Iso.worldToScreen(0, rows, 0);
+
+      g.fillStyle = shadeHex(pal.curb, -18);
+      g.beginPath();
+      g.moveTo(pW.sx + ox, pW.sy + oy);
+      g.lineTo(pS.sx + ox, pS.sy + oy);
+      g.lineTo(pS.sx + ox, pS.sy + oy + rim);
+      g.lineTo(pW.sx + ox, pW.sy + oy + rim);
+      g.closePath();
+      g.fill();
+
+      g.fillStyle = shadeHex(pal.curb, -32);
+      g.beginPath();
+      g.moveTo(pS.sx + ox, pS.sy + oy);
+      g.lineTo(pE.sx + ox, pE.sy + oy);
+      g.lineTo(pE.sx + ox, pE.sy + oy + rim);
+      g.lineTo(pS.sx + ox, pS.sy + oy + rim);
+      g.closePath();
+      g.fill();
+    }
+
+    g.save();
+    traceArenaPolygon(g);
+    g.clip();
 
     function isRoadTile(x, y) {
       for (let i = 0; i < city.roads.vertical.length; i++) {
@@ -173,7 +250,65 @@
       g.fill();
     }
 
-    traceTile(g, 0, 0, cols, rows, ox, oy);
+    // Atom City rail spur
+    if (city.railSpur) {
+      const rs = city.railSpur;
+      traceTile(g, rs.x0, rs.y0, rs.x1, rs.y1, ox, oy);
+      g.fillStyle = '#4e4238';
+      g.fill();
+      g.strokeStyle = '#6d5847';
+      g.lineWidth = 2;
+      for (let tx = rs.x0 + 0.2; tx <= rs.x1 - 0.2; tx += 0.35) {
+        const a = Iso.worldToScreen(tx, rs.y0 + 0.08, 0);
+        const b = Iso.worldToScreen(tx, rs.y1 - 0.08, 0);
+        g.beginPath();
+        g.moveTo(a.sx + ox, a.sy + oy);
+        g.lineTo(b.sx + ox, b.sy + oy);
+        g.stroke();
+      }
+      g.strokeStyle = '#b8c0c8';
+      g.lineWidth = 2;
+      [rs.y0 + 0.22, rs.y1 - 0.22].forEach(function (ry) {
+        const a = Iso.worldToScreen(rs.x0 + 0.08, ry, 0);
+        const b = Iso.worldToScreen(rs.x1 - 0.08, ry, 0);
+        g.beginPath();
+        g.moveTo(a.sx + ox, a.sy + oy);
+        g.lineTo(b.sx + ox, b.sy + oy);
+        g.stroke();
+      });
+    }
+
+    // Metro Heights elevated train track corridor
+    if (city.elevatedTrack) {
+      const tr = city.elevatedTrack;
+      traceTile(g, 0, tr.y0, cols, tr.y1, ox, oy);
+      g.fillStyle = '#2b3242';
+      g.fill();
+      g.strokeStyle = '#3f495e';
+      g.lineWidth = 2;
+      for (let tx = 0.25; tx < cols; tx += 0.45) {
+        const a = Iso.worldToScreen(tx, tr.y0 + 0.12, 0);
+        const b = Iso.worldToScreen(tx, tr.y1 - 0.12, 0);
+        g.beginPath();
+        g.moveTo(a.sx + ox, a.sy + oy);
+        g.lineTo(b.sx + ox, b.sy + oy);
+        g.stroke();
+      }
+      g.strokeStyle = '#9aa8bd';
+      g.lineWidth = 2.2;
+      [tr.y0 + 0.28, tr.y1 - 0.28].forEach(function (ry) {
+        const a = Iso.worldToScreen(0, ry, 0);
+        const b = Iso.worldToScreen(cols, ry, 0);
+        g.beginPath();
+        g.moveTo(a.sx + ox, a.sy + oy);
+        g.lineTo(b.sx + ox, b.sy + oy);
+        g.stroke();
+      });
+    }
+
+    g.restore();
+
+    traceArenaPolygon(g);
     g.strokeStyle = INK;
     g.lineWidth = 3;
     g.stroke();
@@ -185,6 +320,60 @@
       originY: oy
     };
     return groundCache;
+  }
+
+  function drawMiniatureSetTouches(ctx, city, cam, view, timeSec, horizon) {
+    const W = view.w;
+    const H = view.h;
+    const reduced = prefersReducedMotion();
+
+    // Softened distant horizon atmospheric haze band (miniature studio cyclorama depth cue)
+    const haze = ctx.createLinearGradient(0, horizon - 46, 0, horizon + 64);
+    const hazeCol = city.id === 'metro_heights'
+      ? 'rgba(40, 62, 120, 0.34)'
+      : (city.id === 'atom_city' ? 'rgba(255, 198, 130, 0.32)' : 'rgba(220, 242, 255, 0.35)');
+    haze.addColorStop(0, 'rgba(0,0,0,0)');
+    haze.addColorStop(0.5, hazeCol);
+    haze.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = haze;
+    ctx.fillRect(0, horizon - 46, W, 110);
+
+    // Campy 1950s wire-hung flying saucer in upper corner
+    const swayX = reduced ? 0 : Math.sin(timeSec * 0.9) * 16;
+    const swayY = reduced ? 0 : Math.cos(timeSec * 1.4) * 4;
+    const sx = W * 0.16 - cam.x * 0.03 + swayX;
+    const sy = Math.max(46, H * 0.14) + swayY;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(241, 227, 185, 0.28)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(sx, 0);
+    ctx.lineTo(sx, sy - 6);
+    ctx.stroke();
+
+    ctx.translate(sx, sy);
+    ctx.rotate(reduced ? 0 : Math.sin(timeSec * 1.2) * 0.06);
+    ctx.fillStyle = '#9aa8b8';
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 22, 6, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#5ee6ff';
+    ctx.beginPath();
+    ctx.ellipse(0, -4, 9, 5.5, 0, Math.PI, 0);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    const blink = reduced ? 0 : Math.floor(timeSec * 4) % 3;
+    for (let d = -1; d <= 1; d++) {
+      ctx.fillStyle = (d + 1) === blink ? '#ffd23f' : '#ff4f8b';
+      ctx.beginPath();
+      ctx.arc(d * 10, 0.5, 1.8, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
   }
 
   function drawBackdrop(ctx, city, cam, view, timeSec) {
@@ -199,6 +388,209 @@
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, W, H);
 
+    const horizon = H * 0.42 - cam.y * 0.05;
+
+    if (city.id === 'caldera_isle') {
+      // Smoking volcanic cone + glowing lava crater & tropical sea horizon
+      const vx = W * 0.52 - cam.x * 0.05;
+      const vy = horizon + 10;
+      const glow = ctx.createRadialGradient(vx, vy - 68, 8, vx, vy - 68, 120);
+      glow.addColorStop(0, 'rgba(255, 154, 46, 0.65)');
+      glow.addColorStop(0.5, 'rgba(255, 79, 46, 0.28)');
+      glow.addColorStop(1, 'rgba(74, 24, 24, 0)');
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(vx, vy - 68, 120, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = pal.hillFar;
+      ctx.beginPath();
+      ctx.moveTo(0, H);
+      ctx.lineTo(0, horizon + 12);
+      ctx.lineTo(vx - 190, horizon + 6);
+      ctx.lineTo(vx - 48, vy - 66);
+      ctx.lineTo(vx + 48, vy - 66);
+      ctx.lineTo(vx + 190, horizon + 8);
+      ctx.lineTo(W, horizon + 14);
+      ctx.lineTo(W, H);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.fillStyle = '#ff6b57';
+      ctx.beginPath();
+      ctx.ellipse(vx, vy - 66, 46, 8, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = pal.hillNear;
+      ctx.fillRect(0, horizon + 18, W, H - horizon);
+      drawMiniatureSetTouches(ctx, city, cam, view, timeSec, horizon);
+      return;
+    }
+
+    if (city.id === 'harbor_pier') {
+      // Bay water horizon + naval destroyer silhouettes
+      ctx.fillStyle = pal.hillFar;
+      ctx.fillRect(0, horizon, W, H - horizon);
+      const ships = [0.22, 0.68];
+      for (let s = 0; s < ships.length; s++) {
+        const sx = ships[s] * W - cam.x * 0.05;
+        const sy = horizon + 4;
+        ctx.fillStyle = '#1b2b3a';
+        ctx.beginPath();
+        ctx.moveTo(sx - 56, sy);
+        ctx.lineTo(sx + 56, sy);
+        ctx.lineTo(sx + 46, sy + 12);
+        ctx.lineTo(sx - 48, sy + 12);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillRect(sx - 18, sy - 14, 28, 14);
+        ctx.fillRect(sx - 4, sy - 26, 6, 12);
+      }
+      ctx.fillStyle = pal.hillNear;
+      ctx.fillRect(0, horizon + 24, W, H - horizon);
+      drawMiniatureSetTouches(ctx, city, cam, view, timeSec, horizon);
+      return;
+    }
+
+    if (city.id === 'atom_city') {
+      // Distant atomic test mushroom cloud silhouette on the dusk horizon
+      const mcX = W * 0.72 - cam.x * 0.04;
+      const mcY = horizon - 18;
+      ctx.save();
+      const glow = ctx.createRadialGradient(mcX, mcY - 62, 6, mcX, mcY - 62, 95);
+      glow.addColorStop(0, 'rgba(255, 214, 120, 0.55)');
+      glow.addColorStop(0.5, 'rgba(255, 130, 62, 0.25)');
+      glow.addColorStop(1, 'rgba(193, 85, 58, 0)');
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(mcX, mcY - 62, 95, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = 'rgba(110, 46, 36, 0.78)';
+      ctx.beginPath();
+      ctx.moveTo(mcX - 16, mcY + 26);
+      ctx.quadraticCurveTo(mcX - 8, mcY - 18, mcX - 12, mcY - 52);
+      ctx.lineTo(mcX + 12, mcY - 52);
+      ctx.quadraticCurveTo(mcX + 8, mcY - 18, mcX + 16, mcY + 26);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.ellipse(mcX, mcY - 66, 68, 28, 0, 0, Math.PI * 2);
+      ctx.ellipse(mcX - 34, mcY - 56, 36, 18, 0, 0, Math.PI * 2);
+      ctx.ellipse(mcX + 34, mcY - 56, 36, 18, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = 'rgba(255, 196, 107, 0.38)';
+      ctx.beginPath();
+      ctx.ellipse(mcX, mcY - 56, 48, 9, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+
+      // Flat-topped desert mesas (far & near)
+      ctx.fillStyle = pal.hillFar;
+      ctx.beginPath();
+      ctx.moveTo(0, H);
+      const mesasFar = [[0, 0], [0.08, -36], [0.22, -36], [0.28, -8], [0.42, -52], [0.58, -52], [0.64, -14], [0.80, -34], [0.92, -34], [1.0, -6]];
+      for (let i = 0; i < mesasFar.length; i++) {
+        ctx.lineTo(mesasFar[i][0] * W - cam.x * 0.05, horizon + mesasFar[i][1]);
+      }
+      ctx.lineTo(W + 80, H);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.fillStyle = pal.hillNear;
+      ctx.beginPath();
+      ctx.moveTo(0, H);
+      const mesasNear = [[0, 20], [0.14, -14], [0.29, -14], [0.35, 16], [0.60, 14], [0.67, -22], [0.84, -22], [0.91, 14], [1.0, 20]];
+      for (let i = 0; i < mesasNear.length; i++) {
+        ctx.lineTo(mesasNear[i][0] * W - cam.x * 0.10, horizon + mesasNear[i][1]);
+      }
+      ctx.lineTo(W + 80, H);
+      ctx.closePath();
+      ctx.fill();
+      drawMiniatureSetTouches(ctx, city, cam, view, timeSec, horizon);
+      return;
+    }
+
+    if (city.id === 'metro_heights') {
+      // Night stars
+      ctx.fillStyle = 'rgba(220, 238, 255, 0.72)';
+      for (let s = 0; s < 36; s++) {
+        const sx = ((s * 173 + 41) % W);
+        const sy = ((s * 89 + 17) % Math.max(40, horizon - 30));
+        const tw = 0.5 + 0.5 * Math.sin(timeSec * 2.2 + s);
+        ctx.globalAlpha = 0.35 + tw * 0.55;
+        ctx.fillRect(sx, sy, s % 3 === 0 ? 2 : 1.5, s % 3 === 0 ? 2 : 1.5);
+      }
+      ctx.globalAlpha = 1;
+
+      // Sweeping searchlights
+      const beams = [0.22, 0.52, 0.80];
+      for (let b = 0; b < beams.length; b++) {
+        const bx = beams[b] * W - cam.x * 0.04;
+        const by = horizon + 12;
+        const ang = Math.sin(timeSec * (0.9 + b * 0.25) + b * 2.1) * 0.42;
+        ctx.save();
+        ctx.translate(bx, by);
+        ctx.rotate(ang);
+        const lg = ctx.createLinearGradient(0, 0, 0, -horizon - 40);
+        lg.addColorStop(0, 'rgba(94, 230, 255, 0.24)');
+        lg.addColorStop(1, 'rgba(94, 230, 255, 0)');
+        ctx.fillStyle = lg;
+        ctx.beginPath();
+        ctx.moveTo(-6, 0);
+        ctx.lineTo(-44, -horizon - 40);
+        ctx.lineTo(44, -horizon - 40);
+        ctx.lineTo(6, 0);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      }
+
+      // Distant suspension bridge silhouette
+      ctx.save();
+      ctx.strokeStyle = 'rgba(26, 38, 78, 0.85)';
+      ctx.lineWidth = 3;
+      const brY = horizon - 8;
+      const t1 = W * 0.18 - cam.x * 0.04;
+      const t2 = W * 0.44 - cam.x * 0.04;
+      ctx.beginPath();
+      ctx.moveTo(0, brY + 6);
+      ctx.lineTo(W * 0.58, brY + 6);
+      ctx.moveTo(t1, brY + 18);
+      ctx.lineTo(t1, brY - 58);
+      ctx.moveTo(t2, brY + 18);
+      ctx.lineTo(t2, brY - 58);
+      ctx.moveTo(0, brY - 12);
+      ctx.quadraticCurveTo(t1 * 0.5, brY + 4, t1, brY - 56);
+      ctx.quadraticCurveTo((t1 + t2) * 0.5, brY - 4, t2, brY - 56);
+      ctx.quadraticCurveTo(t2 + (W * 0.58 - t2) * 0.5, brY + 4, W * 0.58, brY - 12);
+      ctx.stroke();
+      ctx.restore();
+
+      // Night skyline silhouettes with lit windows
+      ctx.fillStyle = pal.hillFar;
+      ctx.fillRect(0, horizon + 10, W, H - horizon);
+      const towers = 18;
+      const tw = W / towers;
+      for (let i = 0; i < towers; i++) {
+        const th = 34 + ((i * 53 + 19) % 72);
+        const tx = i * tw - (cam.x * 0.06) % tw;
+        const ty = horizon + 14 - th;
+        ctx.fillStyle = i % 2 === 0 ? pal.hillFar : pal.hillNear;
+        ctx.fillRect(tx, ty, tw + 2, th + 30);
+        ctx.fillStyle = i % 3 === 0 ? 'rgba(94, 230, 255, 0.55)' : 'rgba(255, 210, 63, 0.55)';
+        for (let wy = ty + 8; wy < horizon + 6; wy += 10) {
+          for (let wx = tx + 6; wx < tx + tw - 8; wx += 9) {
+            if (((wx + wy + i) % 5) !== 0) ctx.fillRect(wx, wy, 3, 4);
+          }
+        }
+      }
+      drawMiniatureSetTouches(ctx, city, cam, view, timeSec, horizon);
+      return;
+    }
+
     const cloudDrift = (timeSec * 12) % (W + 400);
     const parallaxX = -cam.x * 0.06;
     ctx.fillStyle = 'rgba(255, 252, 240, 0.55)';
@@ -212,7 +604,6 @@
       ctx.fill();
     }
 
-    const horizon = H * 0.42 - cam.y * 0.05;
     ctx.fillStyle = pal.hillFar;
     ctx.beginPath();
     ctx.moveTo(0, H);
@@ -234,6 +625,7 @@
     ctx.lineTo(W, H);
     ctx.closePath();
     ctx.fill();
+    drawMiniatureSetTouches(ctx, city, cam, view, timeSec, horizon);
   }
 
   function drawIsoBox(ctx, fx0, fy0, fx1, fy1, z0, z1, leftCol, rightCol, topCol, strokeCol) {
@@ -470,6 +862,56 @@
     }
 
     if (b.type === 'landmark') {
+      if (b.landmarkKind === 'observation_tower') {
+        // Atom City Observation Tower: concrete base, tall shaft, glass deck, beacon spire
+        drawIsoBox(ctx, b.fx0 + 0.15, b.fy0 + 0.15, b.fx1 - 0.15, b.fy1 - 0.15, 0, 26, leftWall, rightWall, '#8a8275', INK);
+        drawIsoBox(ctx, b.fx0 + 0.85, b.fy0 + 0.85, b.fx1 - 0.85, b.fy1 - 0.85, 26, h * 0.72, leftWall, rightWall, roofCol, INK);
+        drawIsoBox(ctx, b.fx0 + 0.35, b.fy0 + 0.35, b.fx1 - 0.35, b.fy1 - 0.35, h * 0.72, h * 0.90, '#4d7c8a', '#7fd4e6', roofCol, INK);
+        drawWallWindows(ctx, b.fx0 + 0.35, b.fy1 - 0.35, b.fx1 - 0.35, b.fy1 - 0.35, h * 0.74, h * 0.88, 4, 1, b.seed, damaged);
+        drawWallWindows(ctx, b.fx1 - 0.35, b.fy0 + 0.35, b.fx1 - 0.35, b.fy1 - 0.35, h * 0.74, h * 0.88, 4, 1, b.seed + 7, damaged);
+        const topC = Iso.worldToScreen((b.fx0 + b.fx1) * 0.5, (b.fy0 + b.fy1) * 0.5, h * 0.90);
+        const tipC = Iso.worldToScreen((b.fx0 + b.fx1) * 0.5, (b.fy0 + b.fy1) * 0.5, h + 18);
+        ctx.strokeStyle = INK;
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(topC.sx, topC.sy);
+        ctx.lineTo(tipC.sx, tipC.sy);
+        ctx.stroke();
+        ctx.fillStyle = '#7dff4f';
+        ctx.beginPath();
+        ctx.arc(tipC.sx, tipC.sy, 5, 0, Math.PI * 2);
+        ctx.fill();
+        if (damaged) drawWallCracks(ctx, b.fx0 + 0.85, b.fy1 - 0.85, b.fx1 - 0.85, b.fy1 - 0.85, 28, h * 0.70, b.seed);
+        ctx.restore();
+        return;
+      }
+
+      if (b.landmarkKind === 'empire_spire') {
+        // Metro Heights Empire Spire: 3-tier art-deco setbacks + lit spire needle
+        drawIsoBox(ctx, b.fx0 + 0.1, b.fy0 + 0.1, b.fx1 - 0.1, b.fy1 - 0.1, 0, h * 0.42, leftWall, rightWall, shadeHex(roofCol, -18), INK);
+        drawWallWindows(ctx, b.fx0 + 0.1, b.fy1 - 0.1, b.fx1 - 0.1, b.fy1 - 0.1, 10, h * 0.40, 4, 4, b.seed, damaged);
+        drawWallWindows(ctx, b.fx1 - 0.1, b.fy0 + 0.1, b.fx1 - 0.1, b.fy1 - 0.1, 10, h * 0.40, 4, 4, b.seed + 5, damaged);
+        drawIsoBox(ctx, b.fx0 + 0.5, b.fy0 + 0.5, b.fx1 - 0.5, b.fy1 - 0.5, h * 0.42, h * 0.74, leftWall, rightWall, shadeHex(roofCol, -8), INK);
+        drawWallWindows(ctx, b.fx0 + 0.5, b.fy1 - 0.5, b.fx1 - 0.5, b.fy1 - 0.5, h * 0.44, h * 0.72, 3, 3, b.seed + 11, damaged);
+        drawWallWindows(ctx, b.fx1 - 0.5, b.fy0 + 0.5, b.fx1 - 0.5, b.fy1 - 0.5, h * 0.44, h * 0.72, 3, 3, b.seed + 17, damaged);
+        drawIsoBox(ctx, b.fx0 + 0.9, b.fy0 + 0.9, b.fx1 - 0.9, b.fy1 - 0.9, h * 0.74, h * 0.92, leftWall, rightWall, roofCol, INK);
+        const baseS = Iso.worldToScreen((b.fx0 + b.fx1) * 0.5, (b.fy0 + b.fy1) * 0.5, h * 0.92);
+        const tipS = Iso.worldToScreen((b.fx0 + b.fx1) * 0.5, (b.fy0 + b.fy1) * 0.5, h + 26);
+        ctx.strokeStyle = '#ffd23f';
+        ctx.lineWidth = 3.2;
+        ctx.beginPath();
+        ctx.moveTo(baseS.sx, baseS.sy);
+        ctx.lineTo(tipS.sx, tipS.sy);
+        ctx.stroke();
+        ctx.fillStyle = '#ff4f8b';
+        ctx.beginPath();
+        ctx.arc(tipS.sx, tipS.sy, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+        if (damaged) drawWallCracks(ctx, b.fx0 + 0.1, b.fy1 - 0.1, b.fx1 - 0.1, b.fy1 - 0.1, 10, h * 0.40, b.seed);
+        ctx.restore();
+        return;
+      }
+
       drawIsoBox(ctx, b.fx0, b.fy0, b.fx0 + 1.0, b.fy0 + 1.0, 0, Math.min(34, h * 0.35), '#8c8370', '#a39984', roofCol, INK);
       drawIsoBox(ctx, b.fx0 + 0.25, b.fy0 + 0.15, b.fx1 - 0.15, b.fy0 + 0.6, 22, h, leftWall, rightWall, roofCol, INK);
       const sBL = Iso.worldToScreen(b.fx0 + 0.35, b.fy0 + 0.62, 30);
@@ -503,52 +945,141 @@
       return;
     }
 
-    const wallTop = (b.type === 'house') ? h * 0.74 : h;
+    if (b.type === 'radar_dish') {
+      drawIsoBox(ctx, b.fx0 + 0.15, b.fy0 + 0.15, b.fx1 - 0.15, b.fy1 - 0.15, 0, h * 0.60, leftWall, rightWall, roofCol, INK);
+      const dishBase = Iso.worldToScreen((b.fx0 + b.fx1) * 0.5, (b.fy0 + b.fy1) * 0.5, h * 0.60);
+      const dishCtr = Iso.worldToScreen((b.fx0 + b.fx1) * 0.5, (b.fy0 + b.fy1) * 0.5, h * 0.85);
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(dishBase.sx, dishBase.sy);
+      ctx.lineTo(dishCtr.sx, dishCtr.sy);
+      ctx.stroke();
+
+      ctx.save();
+      ctx.translate(dishCtr.sx, dishCtr.sy);
+      ctx.rotate(-0.45 + (damaged ? 0.35 : 0));
+      ctx.fillStyle = flash ? '#ffffff' : '#dce4ec';
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = 2.2;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 22, 12, 0, Math.PI * 0.15, Math.PI * 1.85);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(0, -16);
+      ctx.stroke();
+      ctx.fillStyle = '#ff9a2e';
+      ctx.beginPath();
+      ctx.arc(0, -16, 3.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      if (damaged) drawWallCracks(ctx, b.fx0 + 0.15, b.fy1 - 0.15, b.fx1 - 0.15, b.fy1 - 0.15, 8, h * 0.56, b.seed);
+      ctx.restore();
+      return;
+    }
+
+    if (b.type === 'silo') {
+      drawIsoBox(ctx, b.fx0 + 0.12, b.fy0 + 0.12, b.fx1 - 0.12, b.fy1 - 0.12, 0, h * 0.84, leftWall, rightWall, roofCol, INK);
+      drawIsoBox(ctx, b.fx0 + 0.10, b.fy0 + 0.10, b.fx1 - 0.10, b.fy1 - 0.10, h * 0.58, h * 0.66, '#d1495b', '#e86a78', '#ffd23f', INK);
+      const domeTop = Iso.worldToScreen((b.fx0 + b.fx1) * 0.5, (b.fy0 + b.fy1) * 0.5, h);
+      const domeBase = Iso.worldToScreen((b.fx0 + b.fx1) * 0.5, (b.fy0 + b.fy1) * 0.5, h * 0.84);
+      ctx.fillStyle = roofCol;
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.ellipse(domeBase.sx, (domeBase.sy + domeTop.sy) * 0.5, 18, Math.max(8, (domeBase.sy - domeTop.sy) * 0.65), 0, Math.PI, 0);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      if (damaged) drawWallCracks(ctx, b.fx0 + 0.12, b.fy1 - 0.12, b.fx1 - 0.12, b.fy1 - 0.12, 8, h * 0.80, b.seed);
+      ctx.restore();
+      return;
+    }
+
+    if (b.type === 'tower') {
+      if (b.artDeco) {
+        drawIsoBox(ctx, b.fx0, b.fy0, b.fx1, b.fy1, 0, h * 0.54, leftWall, rightWall, shadeHex(roofCol, -12), INK);
+        drawWallWindows(ctx, b.fx0, b.fy1, b.fx1, b.fy1, 10, h * 0.52, 4, 4, b.id * 23, damaged);
+        drawWallWindows(ctx, b.fx1, b.fy0, b.fx1, b.fy1, 10, h * 0.52, 4, 4, b.id * 41, damaged);
+        drawIsoBox(ctx, b.fx0 + 0.28, b.fy0 + 0.28, b.fx1 - 0.28, b.fy1 - 0.28, h * 0.54, h * 0.88, leftWall, rightWall, roofCol, INK);
+        drawWallWindows(ctx, b.fx0 + 0.28, b.fy1 - 0.28, b.fx1 - 0.28, b.fy1 - 0.28, h * 0.56, h * 0.86, 3, 2, b.id * 29, damaged);
+        drawWallWindows(ctx, b.fx1 - 0.28, b.fy0 + 0.28, b.fx1 - 0.28, b.fy1 - 0.28, h * 0.56, h * 0.86, 3, 2, b.id * 37, damaged);
+        const sBase = Iso.worldToScreen((b.fx0 + b.fx1) * 0.5, (b.fy0 + b.fy1) * 0.5, h * 0.88);
+        const sTip = Iso.worldToScreen((b.fx0 + b.fx1) * 0.5, (b.fy0 + b.fy1) * 0.5, h + 16);
+        ctx.strokeStyle = '#ffd23f';
+        ctx.lineWidth = 2.6;
+        ctx.beginPath();
+        ctx.moveTo(sBase.sx, sBase.sy);
+        ctx.lineTo(sTip.sx, sTip.sy);
+        ctx.stroke();
+      } else {
+        drawIsoBox(ctx, b.fx0, b.fy0, b.fx1, b.fy1, 0, h, leftWall, rightWall, roofCol, INK);
+        drawWallWindows(ctx, b.fx0, b.fy1, b.fx1, b.fy1, 10, h - 8, 4, 5, b.id * 23, damaged);
+        drawWallWindows(ctx, b.fx1, b.fy0, b.fx1, b.fy1, 10, h - 8, 4, 5, b.id * 41, damaged);
+      }
+      if (damaged) {
+        drawWallCracks(ctx, b.fx0, b.fy1, b.fx1, b.fy1, 6, h * 0.5, b.seed);
+      }
+      ctx.restore();
+      return;
+    }
+
+    const wallTop = (b.type === 'house' && b.style !== 'tract') ? h * 0.74 : h;
     drawIsoBox(ctx, b.fx0, b.fy0, b.fx1, b.fy1, 0, wallTop, leftWall, rightWall, roofCol, INK);
 
     if (b.type === 'house') {
-      const ridgeY = (b.fy0 + b.fy1) * 0.5;
-      const tiltOff = damaged ? -6 : 0;
-      const rA = Iso.worldToScreen(b.fx0 + 0.1, ridgeY, h);
-      const rB = Iso.worldToScreen(b.fx1 - 0.1, ridgeY, h + tiltOff);
-      const cNW = Iso.worldToScreen(b.fx0, b.fy0, wallTop);
-      const cNE = Iso.worldToScreen(b.fx1, b.fy0, wallTop + tiltOff);
-      const cSE = Iso.worldToScreen(b.fx1, b.fy1, wallTop + tiltOff);
-      const cSW = Iso.worldToScreen(b.fx0, b.fy1, wallTop);
+      if (b.style === 'tract') {
+        // Mid-century flat overhanging roof + carport/porch accent
+        drawIsoBox(ctx, b.fx0 - 0.08, b.fy0 - 0.08, b.fx1 + 0.08, b.fy1 + 0.08, wallTop - 6, wallTop + 3, shadeHex(roofCol, -18), shadeHex(roofCol, -6), roofCol, INK);
+        drawWallWindows(ctx, b.fx0, b.fy1, b.fx1, b.fy1, 10, wallTop - 10, 2, 1, b.id * 17, damaged);
+        drawWallWindows(ctx, b.fx1, b.fy0, b.fx1, b.fy1, 10, wallTop - 10, 2, 1, b.id * 31, damaged);
+      } else {
+        const ridgeY = (b.fy0 + b.fy1) * 0.5;
+        const tiltOff = damaged ? -6 : 0;
+        const rA = Iso.worldToScreen(b.fx0 + 0.1, ridgeY, h);
+        const rB = Iso.worldToScreen(b.fx1 - 0.1, ridgeY, h + tiltOff);
+        const cNW = Iso.worldToScreen(b.fx0, b.fy0, wallTop);
+        const cNE = Iso.worldToScreen(b.fx1, b.fy0, wallTop + tiltOff);
+        const cSE = Iso.worldToScreen(b.fx1, b.fy1, wallTop + tiltOff);
+        const cSW = Iso.worldToScreen(b.fx0, b.fy1, wallTop);
 
-      ctx.strokeStyle = INK;
-      ctx.lineWidth = 2;
-      ctx.fillStyle = roofCol;
-      ctx.beginPath();
-      ctx.moveTo(cSW.sx, cSW.sy);
-      ctx.lineTo(cSE.sx, cSE.sy);
-      ctx.lineTo(rB.sx, rB.sy);
-      ctx.lineTo(rA.sx, rA.sy);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
+        ctx.strokeStyle = INK;
+        ctx.lineWidth = 2;
+        ctx.fillStyle = roofCol;
+        ctx.beginPath();
+        ctx.moveTo(cSW.sx, cSW.sy);
+        ctx.lineTo(cSE.sx, cSE.sy);
+        ctx.lineTo(rB.sx, rB.sy);
+        ctx.lineTo(rA.sx, rA.sy);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
 
-      ctx.fillStyle = shadeHex(roofCol, -25);
-      ctx.beginPath();
-      ctx.moveTo(cSE.sx, cSE.sy);
-      ctx.lineTo(cNE.sx, cNE.sy);
-      ctx.lineTo(rB.sx, rB.sy);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
+        ctx.fillStyle = shadeHex(roofCol, -25);
+        ctx.beginPath();
+        ctx.moveTo(cSE.sx, cSE.sy);
+        ctx.lineTo(cNE.sx, cNE.sy);
+        ctx.lineTo(rB.sx, rB.sy);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
 
-      ctx.fillStyle = shadeHex(roofCol, 14);
-      ctx.beginPath();
-      ctx.moveTo(cNW.sx, cNW.sy);
-      ctx.lineTo(cNE.sx, cNE.sy);
-      ctx.lineTo(rB.sx, rB.sy);
-      ctx.lineTo(rA.sx, rA.sy);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
+        ctx.fillStyle = shadeHex(roofCol, 14);
+        ctx.beginPath();
+        ctx.moveTo(cNW.sx, cNW.sy);
+        ctx.lineTo(cNE.sx, cNE.sy);
+        ctx.lineTo(rB.sx, rB.sy);
+        ctx.lineTo(rA.sx, rA.sy);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
 
-      drawWallWindows(ctx, b.fx0, b.fy1, b.fx1, b.fy1, 8, wallTop - 6, 2, 1, b.id * 17, damaged);
-      drawWallWindows(ctx, b.fx1, b.fy0, b.fx1, b.fy1, 8, wallTop - 6, 2, 1, b.id * 31, damaged);
+        drawWallWindows(ctx, b.fx0, b.fy1, b.fx1, b.fy1, 8, wallTop - 6, 2, 1, b.id * 17, damaged);
+        drawWallWindows(ctx, b.fx1, b.fy0, b.fx1, b.fy1, 8, wallTop - 6, 2, 1, b.id * 31, damaged);
+      }
     } else if (b.type === 'office' || b.type === 'theater') {
       const stories = b.type === 'office' ? 4 : 3;
       drawWallWindows(ctx, b.fx0, b.fy1, b.fx1, b.fy1, 10, wallTop - 8, 3, stories, b.id * 23, damaged);
@@ -557,6 +1088,51 @@
       if (b.type === 'theater') {
         drawIsoBox(ctx, b.fx0 + 0.2, b.fy1 - 0.05, b.fx1 - 0.2, b.fy1 + 0.25, 22, 34, '#c1272d', '#9e1c22', '#ffd23f', INK);
       }
+      if (b.hasCrane) {
+        // Rooftop construction crane
+        const mastBot = Iso.worldToScreen((b.fx0 + b.fx1) * 0.5, (b.fy0 + b.fy1) * 0.5, wallTop);
+        const mastTop = Iso.worldToScreen((b.fx0 + b.fx1) * 0.5, (b.fy0 + b.fy1) * 0.5, wallTop + 34);
+        const jibEnd = Iso.worldToScreen(b.fx1 + 0.9, (b.fy0 + b.fy1) * 0.5, wallTop + 36);
+        const ctrEnd = Iso.worldToScreen(b.fx0 - 0.2, (b.fy0 + b.fy1) * 0.5, wallTop + 32);
+        ctx.strokeStyle = '#ffd23f';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(mastBot.sx, mastBot.sy);
+        ctx.lineTo(mastTop.sx, mastTop.sy);
+        ctx.moveTo(ctrEnd.sx, ctrEnd.sy);
+        ctx.lineTo(jibEnd.sx, jibEnd.sy);
+        ctx.stroke();
+        ctx.strokeStyle = INK;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(jibEnd.sx, jibEnd.sy);
+        ctx.lineTo(jibEnd.sx, jibEnd.sy + 18);
+        ctx.stroke();
+      }
+    } else if (b.type === 'bunker') {
+      drawIsoBox(ctx, b.fx0 + 0.15, b.fy0 + 0.15, b.fx1 - 0.15, b.fy1 - 0.15, wallTop, wallTop + 10, shadeHex(leftWall, -10), shadeHex(rightWall, -10), '#7a746a', INK);
+      drawWallWindows(ctx, b.fx0, b.fy1, b.fx1, b.fy1, wallTop - 22, wallTop - 10, 3, 1, b.id * 11, damaged);
+      drawWallWindows(ctx, b.fx1, b.fy0, b.fx1, b.fy1, wallTop - 22, wallTop - 10, 3, 1, b.id * 13, damaged);
+    } else if (b.type === 'motel') {
+      drawWallWindows(ctx, b.fx0, b.fy1, b.fx1, b.fy1, 10, wallTop - 10, 3, 2, b.id * 19, damaged);
+      drawWallWindows(ctx, b.fx1, b.fy0, b.fx1, b.fy1, 10, wallTop - 10, 2, 2, b.id * 29, damaged);
+      drawIsoBox(ctx, b.fx0 + 0.1, b.fy1 - 0.05, b.fx1 - 0.1, b.fy1 + 0.18, 22, 29, '#ff4f8b', '#c1272d', '#ffd23f', INK);
+      // Mushroom Motel neon rooftop sign
+      const signBase = Iso.worldToScreen(b.fx0 + 0.45, b.fy1 - 0.2, wallTop);
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(signBase.sx, signBase.sy);
+      ctx.lineTo(signBase.sx, signBase.sy - 20);
+      ctx.stroke();
+      ctx.fillStyle = '#ff9a2e';
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.ellipse(signBase.sx, signBase.sy - 22, 13, 7, 0, Math.PI, 0);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
     } else if (b.type === 'shop' || b.type === 'diner') {
       drawWallWindows(ctx, b.fx0, b.fy1, b.fx1, b.fy1, 10, wallTop - 10, 3, 1, b.id * 19, damaged);
       drawWallWindows(ctx, b.fx1, b.fy0, b.fx1, b.fy1, 10, wallTop - 10, 2, 1, b.id * 29, damaged);
@@ -1188,11 +1764,190 @@
     }
   }
 
+  function drawOctopulusBody(ctx, k, p) {
+    const cols = k.stats.colors;
+    const flash = k.hitFlash > 0;
+    const bodyCol = flash ? '#ffffff' : cols.body;
+    const shadeCol = flash ? '#ffffff' : cols.shade;
+    const bellyCol = flash ? '#ffffff' : cols.belly;
+    const t = k.animT || 0;
+
+    // 6 curling/whipping tentacles around base and sides
+    for (let i = 0; i < 6; i++) {
+      const side = (i - 2.5) * 0.42;
+      const sway = Math.sin(t * 4.2 + i * 1.1) * 7 + (i >= 4 ? p.armExtend * 0.6 : 0);
+      const bx = side * 26;
+      const by = -14;
+      const mx = bx + side * 22 + sway;
+      const my = -6 + Math.cos(t * 3.5 + i) * 5;
+      const tx = mx + side * 16 + sway * 0.8;
+      const ty = 2 + Math.sin(t * 4.8 + i) * 4;
+
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = 10;
+      ctx.beginPath();
+      ctx.moveTo(bx, by);
+      ctx.quadraticCurveTo(mx, my, tx, ty);
+      ctx.stroke();
+
+      ctx.strokeStyle = i % 2 === 0 ? bodyCol : shadeCol;
+      ctx.lineWidth = 6.5;
+      ctx.beginPath();
+      ctx.moveTo(bx, by);
+      ctx.quadraticCurveTo(mx, my, tx, ty);
+      ctx.stroke();
+
+      // Suction cups
+      ctx.fillStyle = cols.accent;
+      ctx.beginPath();
+      ctx.arc((bx + mx) * 0.5, (by + my) * 0.5 + 2, 2.2, 0, Math.PI * 2);
+      ctx.arc(mx, my + 2, 2.0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Torso / muscular collar
+    ctx.fillStyle = shadeCol;
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 2.6;
+    ctx.beginPath();
+    ctx.ellipse(0, -34, 24, 22, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Bulbous cephalopod mantle dome
+    ctx.fillStyle = bodyCol;
+    ctx.beginPath();
+    ctx.ellipse(-2, -68, 28, 32, -0.12, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Bioluminescent mantle spots
+    ctx.fillStyle = bellyCol;
+    ctx.beginPath();
+    ctx.ellipse(-12, -78, 5, 8, -0.3, 0, Math.PI * 2);
+    ctx.ellipse(-4, -86, 4, 6, -0.1, 0, Math.PI * 2);
+    ctx.fill();
+
+    if (!p.backFacing) {
+      // Fierce brow ridge & golden cephalopod eyes
+      ctx.fillStyle = cols.eye;
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.ellipse(12, -56, 7, 5.5, -0.1, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = INK;
+      ctx.fillRect(9, -57, 6, 2.5);
+    }
+
+    // Front striking tentacle whip arm
+    drawSimpleLimb(ctx, 8, -44, p.armAngle + 0.2, 10, 26 + p.armExtend * 1.25, 4, bodyCol, cols.accent, 2);
+  }
+
+  function drawBrainFiendBody(ctx, k, p) {
+    const cols = k.stats.colors;
+    const flash = k.hitFlash > 0;
+    const brainCol = flash ? '#ffffff' : cols.body;
+    const shadeCol = flash ? '#ffffff' : cols.shade;
+    const saucerCol = flash ? '#ffffff' : cols.belly;
+    const t = k.animT || 0;
+    const hover = Math.sin(t * 5.0) * 3.0;
+
+    ctx.save();
+    ctx.translate(0, hover);
+
+    // Thruster glow under saucer
+    ctx.fillStyle = cols.accent;
+    ctx.globalAlpha = 0.65 + Math.sin(t * 12) * 0.2;
+    ctx.beginPath();
+    ctx.ellipse(0, -10, 20, 6, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+
+    // Articulated tripod claw legs
+    drawSimpleLimb(ctx, -12, -16, p.stride * 0.35 + 0.2, 7, 16, 2, shadeCol, cols.accent, 2);
+    drawSimpleLimb(ctx, 12, -16, -p.stride * 0.35 - 0.2, 7, 16, 2, shadeCol, cols.accent, 2);
+
+    // Metallic hover saucer rim
+    ctx.fillStyle = saucerCol;
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 2.6;
+    ctx.beginPath();
+    ctx.ellipse(0, -24, 30, 11, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Glowing saucer portholes
+    for (let i = -2; i <= 2; i++) {
+      ctx.fillStyle = (i + Math.floor(t * 6)) % 2 === 0 ? cols.accent : cols.eye;
+      ctx.beginPath();
+      ctx.arc(i * 10, -23, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Pulsing giant exposed brain
+    const pulse = 1 + Math.sin(t * 6.0) * 0.045;
+    ctx.save();
+    ctx.translate(0, -56);
+    ctx.scale(pulse, pulse);
+    ctx.fillStyle = brainCol;
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 2.6;
+    ctx.beginPath();
+    ctx.ellipse(-6, 0, 22, 24, -0.1, 0, Math.PI * 2);
+    ctx.ellipse(8, 2, 20, 22, 0.1, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Brain gyri/sulci squiggles
+    ctx.strokeStyle = shadeCol;
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    ctx.arc(-8, -6, 8, 0.4, 2.8);
+    ctx.moveTo(2, -12);
+    ctx.quadraticCurveTo(10, -2, 2, 10);
+    ctx.moveTo(-14, 6);
+    ctx.quadraticCurveTo(-2, 12, 12, 4);
+    ctx.stroke();
+    ctx.restore();
+
+    // Translucent glass containment dome highlight
+    ctx.strokeStyle = 'rgba(94, 230, 255, 0.65)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0, -52, 29, Math.PI * 1.05, Math.PI * 1.95);
+    ctx.stroke();
+
+    if (!p.backFacing) {
+      // Twin alien optic stalks inside dome
+      ctx.fillStyle = cols.eye;
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(10, -44, 5.5, 0, Math.PI * 2);
+      ctx.arc(20, -46, 4.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#c1272d';
+      ctx.beginPath();
+      ctx.arc(11, -44, 2.2, 0, Math.PI * 2);
+      ctx.arc(21, -46, 1.8, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Telekinetic claw manipulator arm
+    drawSimpleLimb(ctx, 8, -32, p.armAngle, 8, 20 + p.armExtend, 3, saucerCol, cols.accent, 2);
+    ctx.restore();
+  }
+
   function drawMonsterBody(ctx, k, pose) {
     const mid = k.monsterId || 'gorgantor';
     if (mid === 'mongo') drawMongoBody(ctx, k, pose);
     else if (mid === 'lepidora') drawLepidoraBody(ctx, k, pose);
     else if (mid === 'tin_colossus') drawTinColossusBody(ctx, k, pose);
+    else if (mid === 'octopulus') drawOctopulusBody(ctx, k, pose);
+    else if (mid === 'brain_fiend') drawBrainFiendBody(ctx, k, pose);
     else drawGorgantorBody(ctx, k, pose);
   }
 
@@ -1719,6 +2474,96 @@
       ctx.arc(20, 0, 5.5, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
+    } else if (propType === 'boxcar') {
+      ctx.fillStyle = '#b34b3b';
+      ctx.beginPath();
+      ctx.roundRect(-22, -11, 44, 22, 3);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#7d3025';
+      ctx.fillRect(-10, -10, 20, 20);
+      ctx.strokeRect(-10, -10, 20, 20);
+      ctx.fillStyle = '#232830';
+      ctx.beginPath();
+      ctx.arc(-14, 11, 4, 0, Math.PI * 2);
+      ctx.arc(14, 11, 4, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (propType === 'container') {
+      ctx.fillStyle = '#2e7d9b';
+      ctx.beginPath();
+      ctx.roundRect(-22, -11, 44, 22, 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.strokeStyle = '#1b4d61';
+      for (let rx = -15; rx <= 15; rx += 6) {
+        ctx.beginPath();
+        ctx.moveTo(rx, -9);
+        ctx.lineTo(rx, 9);
+        ctx.stroke();
+      }
+    } else if (propType === 'bus') {
+      ctx.fillStyle = '#e89c31';
+      ctx.beginPath();
+      ctx.roundRect(-21, -10, 42, 18, 4);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#a9d6e5';
+      ctx.fillRect(-16, -7, 32, 6);
+      ctx.fillStyle = '#1b242c';
+      ctx.beginPath();
+      ctx.arc(-12, 9, 4, 0, Math.PI * 2);
+      ctx.arc(12, 9, 4, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (propType === 'taxi') {
+      ctx.fillStyle = '#ffd23f';
+      ctx.beginPath();
+      ctx.roundRect(-16, -6, 32, 13, 4);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#a9d6e5';
+      ctx.beginPath();
+      ctx.roundRect(-9, -13, 18, 8, 3);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#1b242c';
+      ctx.fillRect(-4, -6, 8, 3);
+      ctx.beginPath();
+      ctx.arc(-9, 7, 4, 0, Math.PI * 2);
+      ctx.arc(9, 7, 4, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (propType === 'jeep') {
+      ctx.fillStyle = '#7f8c5a';
+      ctx.beginPath();
+      ctx.roundRect(-16, -7, 32, 14, 3);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#d4c9a8';
+      ctx.fillRect(-7, -12, 14, 6);
+      ctx.strokeRect(-7, -12, 14, 6);
+      ctx.fillStyle = '#1b242c';
+      ctx.beginPath();
+      ctx.arc(-9, 8, 4.5, 0, Math.PI * 2);
+      ctx.arc(9, 8, 4.5, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (propType === 'boulder') {
+      ctx.fillStyle = '#5c4d42';
+      ctx.beginPath();
+      ctx.moveTo(-16, 4);
+      ctx.lineTo(-12, -11);
+      ctx.lineTo(2, -14);
+      ctx.lineTo(15, -7);
+      ctx.lineTo(17, 6);
+      ctx.lineTo(4, 12);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.strokeStyle = '#ff9a2e';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(-7, -5);
+      ctx.lineTo(2, 1);
+      ctx.lineTo(9, -3);
+      ctx.stroke();
     } else {
       // water_tank
       ctx.fillStyle = '#6da6c4';
@@ -2227,35 +3072,234 @@
     const alpha = Math.min(fadeIn, fadeOut);
     if (alpha <= 0.02) return;
 
-    const w = Math.min(view.w - 40, 440);
-    const h = tc.sub ? 84 : 58;
-    const x = (view.w - w) * 0.5;
-    const y = Math.max(76, view.h * 0.18);
+    const reduced = prefersReducedMotion();
+    const w = Math.min(view.w - 40, 480);
+    const h = tc.sub ? 96 : 68;
+    const cx = view.w * 0.5;
+    const cy = Math.max(82, view.h * 0.19) + h * 0.5;
+    const bounce = reduced ? 1 : (fadeIn < 1 ? U.lerp(0.92, 1.0, fadeIn) : 1);
 
     ctx.save();
     ctx.globalAlpha = alpha;
-    ctx.fillStyle = 'rgba(13, 18, 28, 0.92)';
+    ctx.translate(cx, cy);
+    if (!reduced) ctx.rotate(-0.028);
+    ctx.scale(bounce, bounce);
+
+    const x = -w * 0.5;
+    const y = -h * 0.5;
+    ctx.fillStyle = 'rgba(13, 18, 28, 0.94)';
     ctx.strokeStyle = tc.boss ? '#ff3b30' : '#ffd23f';
     ctx.lineWidth = 4;
     ctx.fillRect(x, y, w, h);
     ctx.strokeRect(x, y, w, h);
 
-    ctx.fillStyle = '#0d121c';
-    ctx.strokeStyle = INK;
-    ctx.lineWidth = 2;
-    ctx.strokeRect(x + 5, y + 5, w - 10, h - 10);
+    // Filmstrip sprocket-hole borders along top & bottom of the title card
+    ctx.fillStyle = INK;
+    ctx.fillRect(x + 2, y + 2, w - 4, 10);
+    ctx.fillRect(x + 2, y + h - 12, w - 4, 10);
+    ctx.fillStyle = '#f1e3b9';
+    for (let sx = x + 10; sx < x + w - 16; sx += 22) {
+      ctx.fillRect(sx, y + 4, 10, 6);
+      ctx.fillRect(sx, y + h - 10, 10, 6);
+    }
 
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
+    const titleY = tc.sub ? -10 : 0;
+    ctx.font = '900 24px Impact, "Arial Black", sans-serif';
+    // Thick red & black B-movie offset shadow (PLAN.md §9.2)
+    ctx.fillStyle = INK;
+    ctx.fillText(tc.title || 'REEL 1', 4, titleY + 4);
+    ctx.fillStyle = '#c1272d';
+    ctx.fillText(tc.title || 'REEL 1', 2, titleY + 2);
     ctx.fillStyle = tc.boss ? '#ff6b57' : '#ffd23f';
-    ctx.font = '900 24px "Arial Black", Impact, sans-serif';
-    ctx.fillText(tc.title || 'REEL 1', view.w * 0.5, y + (tc.sub ? 30 : h * 0.5));
+    ctx.fillText(tc.title || 'REEL 1', 0, titleY);
+
     if (tc.sub) {
-      ctx.fillStyle = '#fff3d6';
-      ctx.font = '700 13px "Trebuchet MS", sans-serif';
-      ctx.fillText(tc.sub, view.w * 0.5, y + 58);
+      ctx.fillStyle = '#f1e3b9';
+      ctx.font = '700 12px "Courier New", monospace';
+      ctx.fillText(tc.sub, 0, 20);
     }
     ctx.restore();
+  }
+
+  function drawFilmFxOverlay(ctx, view, timeSec) {
+    if (KB.CONFIG && KB.CONFIG.FILM_FX === false) return;
+    const W = view.w;
+    const H = view.h;
+    const reduced = prefersReducedMotion();
+
+    ctx.save();
+    // Subtle 1950s Technicolor warm tint wash
+    ctx.fillStyle = 'rgba(255, 206, 130, 0.045)';
+    ctx.fillRect(0, 0, W, H);
+
+    // Vignette framing
+    const vg = ctx.createRadialGradient(W * 0.5, H * 0.5, Math.min(W, H) * 0.30, W * 0.5, H * 0.5, Math.max(W, H) * 0.72);
+    vg.addColorStop(0, 'rgba(8, 12, 20, 0)');
+    vg.addColorStop(1, 'rgba(8, 12, 20, 0.42)');
+    ctx.fillStyle = vg;
+    ctx.fillRect(0, 0, W, H);
+
+    // Offscreen pre-rendered film grain tile (1 pattern fillRect vs tiling drawImages)
+    const tile = ensureGrainTile();
+    if (tile) {
+      const tw = tile.width;
+      const th = tile.height;
+      const frameIdx = reduced ? 0 : Math.floor(timeSec * 24);
+      const ox = reduced ? 0 : -((frameIdx * 37) % tw);
+      const oy = reduced ? 0 : -((frameIdx * 53) % th);
+      ctx.globalAlpha = reduced ? 0.03 : 0.075;
+      if (!grainPattern && typeof ctx.createPattern === 'function') {
+        try { grainPattern = ctx.createPattern(tile, 'repeat'); } catch (e) { grainPattern = null; }
+      }
+      if (grainPattern) {
+        ctx.save();
+        ctx.translate(ox, oy);
+        ctx.fillStyle = grainPattern;
+        ctx.fillRect(-ox, -oy, W, H);
+        ctx.restore();
+      } else {
+        for (let y = oy; y < H; y += th) {
+          for (let x = ox; x < W; x += tw) {
+            ctx.drawImage(tile, x, y);
+          }
+        }
+      }
+    }
+
+    // Subtle vertical scratch flicker (disabled under prefers-reduced-motion)
+    if (!reduced) {
+      const f = Math.floor(timeSec * 18);
+      if ((f % 7) === 0 || (f % 19) === 0) {
+        const sx = ((f * 197 + 83) % Math.max(100, W - 80)) + 40;
+        ctx.globalAlpha = 0.14;
+        ctx.strokeStyle = '#f1e3b9';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(sx, 0);
+        ctx.lineTo(sx + ((f % 3) - 1) * 4, H);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
+  function prefersReducedMotion() {
+    return typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  }
+
+  function drawCityHazardsWorld(ctx, city, timeSec) {
+    if (!city || !city.hazard || city.hazard.kind === 'none') return;
+    const h = city.hazard;
+
+    if (h.kind === 'siren' && h.waveTimer > 0) {
+      const prog = 1 - (h.waveTimer / 1.2);
+      const rad = 1.5 + prog * 14.0;
+      const c = Iso.worldToScreen(city.cols * 0.5, city.rows * 0.5, 4);
+      const e = Iso.worldToScreen(city.cols * 0.5 + rad, city.rows * 0.5, 4);
+      const rx = Math.max(24, Math.hypot(e.sx - c.sx, e.sy - c.sy));
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, (1 - prog) * 0.72);
+      ctx.strokeStyle = '#7dff4f';
+      ctx.lineWidth = 6 * (1 - prog * 0.5);
+      ctx.beginPath();
+      ctx.ellipse(c.sx, c.sy, rx, rx * 0.5, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    if (h.kind === 'train') {
+      if (h.state === 'warning' || h.state === 'crossing') {
+        const blink = Math.floor(timeSec * 10) % 2 === 0;
+        const ym = (h.trackY0 + h.trackY1) * 0.5;
+        ctx.save();
+        ctx.fillStyle = blink ? '#ff3b30' : '#ffd23f';
+        for (let lx = 2; lx <= city.cols - 2; lx += 4) {
+          const p = Iso.worldToScreen(lx, h.trackY1 + 0.1, 14);
+          ctx.beginPath();
+          ctx.arc(p.sx, p.sy, blink ? 5.5 : 3.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        if (h.state === 'warning') {
+          const a = Iso.worldToScreen(0.2, ym, 2);
+          const b = Iso.worldToScreen(city.cols - 0.2, ym, 2);
+          ctx.strokeStyle = blink ? 'rgba(255, 59, 48, 0.55)' : 'rgba(255, 210, 63, 0.35)';
+          ctx.lineWidth = 4;
+          ctx.beginPath();
+          ctx.moveTo(a.sx, a.sy);
+          ctx.lineTo(b.sx, b.sy);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
+      if (h.state === 'crossing') {
+        const tx0 = h.trainX - h.trainLen * 0.5;
+        const tx1 = h.trainX + h.trainLen * 0.5;
+        // Draw 2 articulated silver/cyan metro cars
+        const midX = (tx0 + tx1) * 0.5;
+        drawIsoBox(ctx, tx0, h.trackY0 + 0.1, midX - 0.12, h.trackY1 - 0.1, 4, 38, '#536278', '#8aa0bd', '#cfd8e3', INK);
+        drawIsoBox(ctx, midX + 0.12, h.trackY0 + 0.1, tx1, h.trackY1 - 0.1, 4, 38, '#536278', '#8aa0bd', '#cfd8e3', INK);
+        drawWallWindows(ctx, tx0 + 0.15, h.trackY1 - 0.1, midX - 0.25, h.trackY1 - 0.1, 16, 30, 3, 1, 7, false);
+        drawWallWindows(ctx, midX + 0.25, h.trackY1 - 0.1, tx1 - 0.15, h.trackY1 - 0.1, 16, 30, 3, 1, 13, false);
+        // Headlight glow at front of train
+        const head = Iso.worldToScreen(tx1 + 0.1, (h.trackY0 + h.trackY1) * 0.5, 18);
+        ctx.save();
+        ctx.fillStyle = 'rgba(255, 240, 160, 0.75)';
+        ctx.beginPath();
+        ctx.arc(head.sx, head.sy, 10, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+
+    if (h.kind === 'fissure' && (h.telegraphed || h.activeTimer > 0)) {
+      const vents = h.vents || [{ x: 11.0, y: 2.6 }, { x: 19.2, y: 11.0 }, { x: 11.0, y: 19.2 }];
+      const pulse = 0.55 + 0.45 * Math.sin(timeSec * 12);
+      ctx.save();
+      for (let i = 0; i < vents.length; i++) {
+        const p = Iso.worldToScreen(vents[i].x, vents[i].y, 2);
+        ctx.strokeStyle = h.activeTimer > 0 ? '#ffd23f' : 'rgba(255, 107, 87, ' + (0.45 + pulse * 0.45) + ')';
+        ctx.lineWidth = h.activeTimer > 0 ? 4 : 3;
+        ctx.beginPath();
+        ctx.ellipse(p.sx, p.sy, 28 + pulse * 8, 14 + pulse * 4, 0, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    if (h.kind === 'broadside' && (h.telegraphed || h.activeTimer > 0)) {
+      const targets = h.targets || [{ x: 6.5, y: 13.8 }, { x: 12.0, y: 13.8 }, { x: 17.2, y: 13.8 }];
+      const blink = Math.floor(timeSec * 10) % 2 === 0;
+      ctx.save();
+      for (let i = 0; i < targets.length; i++) {
+        const p = Iso.worldToScreen(targets[i].x, targets[i].y, 2);
+        ctx.strokeStyle = blink ? '#ff3b30' : '#ffd23f';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.ellipse(p.sx, p.sy, 30, 15, 0, 0, Math.PI * 2);
+        ctx.moveTo(p.sx - 18, p.sy);
+        ctx.lineTo(p.sx + 18, p.sy);
+        ctx.moveTo(p.sx, p.sy - 10);
+        ctx.lineTo(p.sx, p.sy + 10);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+  }
+
+  function drawCityHazardsScreen(ctx, city, view) {
+    if (!city || !city.hazard || city.hazard.kind !== 'siren') return;
+    const h = city.hazard;
+    if (h.flashTimer > 0 && !prefersReducedMotion()) {
+      const a = U.clamp((h.flashTimer / 0.4) * 0.65, 0, 0.65);
+      ctx.save();
+      ctx.globalAlpha = a;
+      ctx.fillStyle = '#fff3cf';
+      ctx.fillRect(0, 0, view.w, view.h);
+      ctx.restore();
+    }
   }
 
   function renderScene(ctx, scene, view, timeSec) {
@@ -2310,11 +3354,14 @@
     drawProjectiles(ctx, cctx, timeSec);
     drawVortexes(ctx, scene, timeSec);
     drawSpecialBeams(ctx, scene, timeSec);
+    drawCityHazardsWorld(ctx, city, timeSec);
     drawCombatFx(ctx, cctx);
 
     ctx.restore();
 
-    if (cctx && cctx.screenFlash) {
+    drawCityHazardsScreen(ctx, city, view);
+
+    if (cctx && cctx.screenFlash && !prefersReducedMotion()) {
       const sf = cctx.screenFlash;
       const a = U.clamp((sf.life / sf.maxLife) * sf.alpha, 0, 0.9);
       ctx.save();
@@ -2323,6 +3370,8 @@
       ctx.fillRect(0, 0, view.w, view.h);
       ctx.restore();
     }
+
+    drawFilmFxOverlay(ctx, view, timeSec);
 
     if (scene.titleCard && scene.titleCard.ticks > 0) {
       drawTitleCard(ctx, scene.titleCard, view);
@@ -2384,44 +3433,125 @@
     ctx.restore();
   }
 
-  function drawCityPreview(ctx, cityId, w, h) {
+  function drawCityPreview(ctx, cityId, w, h, timeSec) {
     const cityDef = (KB.CITIES && KB.CITIES.DEFS && (KB.CITIES.DEFS[cityId] || KB.CITIES.DEFS.pinebrook));
     if (!ctx || !cityDef) return;
+    const t = timeSec || 0;
     const pal = cityDef.palette;
     const grad = ctx.createLinearGradient(0, 0, 0, h);
-    grad.addColorStop(0, pal.skyTop);
-    grad.addColorStop(1, pal.skyBottom);
+    grad.addColorStop(0, pal.skyTop || '#4ea2dc');
+    grad.addColorStop(0.55, pal.skyMid || '#7fc8f8');
+    grad.addColorStop(1, pal.skyBot || '#d9f0ff');
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, w, h);
 
-    // Distant stylized skyline matching city palette
+    if (cityDef.id === 'caldera_isle') {
+      ctx.fillStyle = pal.hillFar;
+      ctx.beginPath();
+      ctx.moveTo(0, h - 12);
+      ctx.lineTo(w * 0.35, h - 38);
+      ctx.lineTo(w * 0.65, h - 38);
+      ctx.lineTo(w, h - 12);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = '#ff6b57';
+      ctx.beginPath();
+      ctx.ellipse(w * 0.5, h - 38, 18, 4, 0, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (cityDef.id === 'harbor_pier') {
+      ctx.fillStyle = pal.hillFar;
+      ctx.fillRect(0, h - 22, w, 10);
+      ctx.fillStyle = '#1b2b3a';
+      ctx.fillRect(w * 0.62, h - 28, 34, 7);
+      ctx.fillRect(w * 0.70, h - 34, 12, 6);
+    } else if (cityDef.id === 'atom_city') {
+      // Distant mushroom cloud + desert mesas
+      const mcX = w * 0.74;
+      const mcY = h - 22;
+      ctx.fillStyle = 'rgba(110, 46, 36, 0.78)';
+      ctx.fillRect(mcX - 4, mcY - 22, 8, 22);
+      ctx.beginPath();
+      ctx.ellipse(mcX, mcY - 24, 22, 9, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = pal.hillFar;
+      ctx.beginPath();
+      ctx.moveTo(0, h - 12);
+      ctx.lineTo(w * 0.12, h - 28);
+      ctx.lineTo(w * 0.34, h - 28);
+      ctx.lineTo(w * 0.42, h - 14);
+      ctx.lineTo(w * 0.62, h - 14);
+      ctx.lineTo(w * 0.70, h - 24);
+      ctx.lineTo(w, h - 24);
+      ctx.lineTo(w, h - 12);
+      ctx.closePath();
+      ctx.fill();
+    } else if (cityDef.id === 'metro_heights') {
+      // Stars + animated searchlights
+      ctx.fillStyle = 'rgba(220, 238, 255, 0.8)';
+      for (let s = 0; s < 14; s++) {
+        ctx.fillRect((s * 37 + 9) % w, (s * 17 + 4) % Math.max(10, h - 28), 1.5, 1.5);
+      }
+      for (let b = 0; b < 2; b++) {
+        const bx = w * (0.28 + b * 0.44);
+        const ang = Math.sin(t * 1.4 + b * 2.1) * 0.38;
+        ctx.save();
+        ctx.translate(bx, h - 12);
+        ctx.rotate(ang);
+        ctx.fillStyle = 'rgba(94, 230, 255, 0.22)';
+        ctx.beginPath();
+        ctx.moveTo(-2, 0);
+        ctx.lineTo(-14, -h);
+        ctx.lineTo(14, -h);
+        ctx.lineTo(2, 0);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      }
+    } else {
+      // Pinebrook hills + clouds
+      ctx.fillStyle = 'rgba(255, 252, 240, 0.65)';
+      ctx.beginPath();
+      ctx.ellipse(w * 0.25 + Math.sin(t * 0.6) * 4, 14, 18, 6, 0, 0, Math.PI * 2);
+      ctx.ellipse(w * 0.72 - Math.sin(t * 0.5) * 4, 18, 15, 5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = pal.hillFar;
+      ctx.beginPath();
+      ctx.moveTo(0, h - 12);
+      ctx.quadraticCurveTo(w * 0.28, h - 32, w * 0.55, h - 18);
+      ctx.quadraticCurveTo(w * 0.82, h - 28, w, h - 14);
+      ctx.lineTo(w, h - 12);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // Stylized city buildings matching city layout & colors
     const blds = cityDef.buildings || [];
     const rand = U.rng(blds.length * 97 + 17);
-    const count = Math.min(8, Math.max(4, blds.length));
+    const count = Math.min(8, Math.max(5, blds.length));
     for (let i = 0; i < count; i++) {
-      const b = blds[i % blds.length];
-      const bw = Math.max(18, Math.round(w / (count + 1.5)));
-      const bh = Math.round(h * (0.28 + (b.h || 2) * 0.095));
-      const bx = Math.round((w / (count + 0.5)) * (i + 0.35));
-      const by = h - 14 - bh;
-      ctx.fillStyle = i % 2 === 0 ? (pal.brick || '#9d7657') : (pal.steel || '#627993');
+      const b = blds[Math.floor((i * blds.length) / count)];
+      const bw = Math.max(16, Math.round(w / (count + 1.8)));
+      const bh = Math.round(h * (b.isLandmark ? 0.62 : (0.24 + (b.type === 'tower' ? 0.30 : (b.type === 'office' ? 0.20 : 0.10)))));
+      const bx = Math.round((w / (count + 0.4)) * (i + 0.25));
+      const by = h - 12 - bh;
+      ctx.fillStyle = b.color || '#9d7657';
       ctx.strokeStyle = INK;
-      ctx.lineWidth = 1.6;
+      ctx.lineWidth = 1.4;
       ctx.fillRect(bx, by, bw, bh);
       ctx.strokeRect(bx, by, bw, bh);
-      ctx.fillStyle = pal.roof || '#4c5b6e';
+      ctx.fillStyle = b.roof || '#4c5b6e';
       ctx.fillRect(bx - 1, by - 3, bw + 2, 4);
-      ctx.fillStyle = '#ffe599';
-      for (let wy = by + 6; wy < by + bh - 8; wy += 9) {
-        for (let wx = bx + 4; wx < bx + bw - 5; wx += 7) {
-          if (rand() > 0.35) ctx.fillRect(wx, wy, 3, 4);
+      ctx.fillStyle = cityDef.id === 'metro_heights' ? '#5ee6ff' : '#ffe599';
+      for (let wy = by + 5; wy < by + bh - 6; wy += 7) {
+        for (let wx = bx + 3; wx < bx + bw - 4; wx += 5) {
+          if (rand() > 0.35) ctx.fillRect(wx, wy, 2.5, 3);
         }
       }
     }
-    ctx.fillStyle = pal.asphalt || '#2d3138';
-    ctx.fillRect(0, h - 14, w, 14);
-    ctx.fillStyle = pal.curb || '#6e737b';
-    ctx.fillRect(0, h - 14, w, 2);
+    ctx.fillStyle = pal.road || '#2d3138';
+    ctx.fillRect(0, h - 12, w, 12);
+    ctx.fillStyle = pal.lane || '#ffd23f';
+    ctx.fillRect(0, h - 7, w, 1.5);
   }
 
   KB.Render = {

@@ -17,7 +17,7 @@
   const PICKUP_LIFE = 12.0;  // seconds
   const PICKUP_MAGNET_R = 1.0;
   const RUBBLE_SLOW_MULT = 0.7;
-  const MAX_PROPS = 16;
+  const MAX_PROPS = 24;
 
   /* Throwable / Smashable street props (PLAN.md §6.4) */
   const PROP_DEFS = {
@@ -93,6 +93,84 @@
       reach: 1.65,
       r: 0.42,
       height: 30
+    },
+    boxcar: {
+      id: 'boxcar',
+      name: 'Rail Boxcar',
+      speedMult: 0.55,
+      throwDmg: 45,
+      smashDmg: 25,
+      uses: 1,
+      pierce: 0,
+      bounces: 0,
+      reach: 1.75,
+      r: 0.42,
+      height: 28
+    },
+    container: {
+      id: 'container',
+      name: 'Harbor Container',
+      speedMult: 0.55,
+      throwDmg: 45,
+      smashDmg: 25,
+      uses: 1,
+      pierce: 0,
+      bounces: 0,
+      reach: 1.75,
+      r: 0.42,
+      height: 28
+    },
+    bus: {
+      id: 'bus',
+      name: 'City Bus',
+      speedMult: 0.70,
+      throwDmg: 28,
+      smashDmg: 18,
+      uses: 1,
+      pierce: 0,
+      bounces: 1,
+      reach: 1.65,
+      r: 0.38,
+      height: 24
+    },
+    taxi: {
+      id: 'taxi',
+      name: 'Metro Taxi',
+      speedMult: 0.75,
+      throwDmg: 25,
+      smashDmg: 15,
+      uses: 1,
+      pierce: 0,
+      bounces: 1,
+      reach: 1.55,
+      r: 0.35,
+      height: 21
+    },
+    jeep: {
+      id: 'jeep',
+      name: 'Range Jeep',
+      speedMult: 0.78,
+      throwDmg: 25,
+      smashDmg: 15,
+      uses: 1,
+      pierce: 0,
+      bounces: 1,
+      reach: 1.55,
+      r: 0.35,
+      height: 21
+    },
+    boulder: {
+      id: 'boulder',
+      name: 'Magma Boulder',
+      speedMult: 0.65,
+      throwDmg: 38,
+      smashDmg: 24,
+      uses: 2,
+      pierce: 0,
+      bounces: 1,
+      reach: 1.70,
+      r: 0.39,
+      height: 25
     }
   };
 
@@ -157,6 +235,7 @@
       blockTicks: 0,
       dodgeCooldown: 0,
       counterWindow: 0,
+      wakeupGraceTicks: 0,
       armorCharges: 0,
       chainQueued: false,
       airAttackUsed: false,
@@ -164,6 +243,7 @@
       special: null,
       specialCooldown: 0,
       overcharged: false,
+      overchargeAuraTicks: 0,
       carrying: null,
       climb: null,
       grabTargetId: null,
@@ -262,7 +342,81 @@
     }
   }
 
+  const CORNER_BEVEL = 1.2;
+  const INV_SQRT2 = Math.SQRT1_2;
+
+  function clampToArenaBounds(k, city) {
+    if (!k || !city) return;
+    const minX = k.r;
+    const maxX = city.cols - k.r;
+    const minY = k.r;
+    const maxY = city.rows - k.r;
+
+    if (k.x < minX) {
+      k.x = minX;
+      if (k.vx < 0) k.vx = 0;
+    } else if (k.x > maxX) {
+      k.x = maxX;
+      if (k.vx > 0) k.vx = 0;
+    }
+    if (k.y < minY) {
+      k.y = minY;
+      if (k.vy < 0) k.vy = 0;
+    } else if (k.y > maxY) {
+      k.y = maxY;
+      if (k.vy > 0) k.vy = 0;
+    }
+
+    // Diagonal corner bevels (or octagonal arena bevel) so entities slide smoothly around all 4 corners
+    const b = (city && city.bevel) || CORNER_BEVEL;
+    const nw = (k.x - minX) + (k.y - minY);
+    if (nw < b) {
+      const push = (b - nw) * 0.5;
+      k.x += push;
+      k.y += push;
+      const vn = (k.vx + k.vy) * INV_SQRT2;
+      if (vn < 0) {
+        k.vx -= vn * INV_SQRT2;
+        k.vy -= vn * INV_SQRT2;
+      }
+    }
+    const ne = (maxX - k.x) + (k.y - minY);
+    if (ne < b) {
+      const push = (b - ne) * 0.5;
+      k.x -= push;
+      k.y += push;
+      const vn = (-k.vx + k.vy) * INV_SQRT2;
+      if (vn < 0) {
+        k.vx -= -vn * INV_SQRT2;
+        k.vy -= vn * INV_SQRT2;
+      }
+    }
+    const sw = (k.x - minX) + (maxY - k.y);
+    if (sw < b) {
+      const push = (b - sw) * 0.5;
+      k.x += push;
+      k.y -= push;
+      const vn = (k.vx - k.vy) * INV_SQRT2;
+      if (vn < 0) {
+        k.vx -= vn * INV_SQRT2;
+        k.vy -= -vn * INV_SQRT2;
+      }
+    }
+    const se = (maxX - k.x) + (maxY - k.y);
+    if (se < b) {
+      const push = (b - se) * 0.5;
+      k.x -= push;
+      k.y -= push;
+      const vn = (-k.vx - k.vy) * INV_SQRT2;
+      if (vn < 0) {
+        k.vx -= -vn * INV_SQRT2;
+        k.vy -= -vn * INV_SQRT2;
+      }
+    }
+  }
+
   function resolveKaijuSeparation(a, b, city) {
+    if (a.state === 'dodge' || b.state === 'dodge') return;
     if (Math.abs(a.z - b.z) > 65) return;
     const minDist = (a.r + b.r) * 0.85;
     const dx = b.x - a.x;
@@ -279,12 +433,12 @@
     b.y += ny * push;
 
     if (city) {
-      a.x = U.clamp(a.x, a.r, city.cols - a.r);
-      a.y = U.clamp(a.y, a.r, city.rows - a.r);
-      b.x = U.clamp(b.x, b.r, city.cols - b.r);
-      b.y = U.clamp(b.y, b.r, city.rows - b.r);
+      clampToArenaBounds(a, city);
+      clampToArenaBounds(b, city);
       resolveBuildingCollisions(a, city.buildings);
       resolveBuildingCollisions(b, city.buildings);
+      clampToArenaBounds(a, city);
+      clampToArenaBounds(b, city);
     }
     syncKaijuBounds(a);
     syncKaijuBounds(b);
@@ -308,14 +462,14 @@
 
   function getMoveSpeedMult(k, city) {
     let mult = 1.0;
-    if (k.fuel >= 80) {
-      mult *= 1.10; // Overcharge (+10% move speed, PLAN.md §6.1)
+    if (k.fuel >= 80 || (k.overchargeAuraTicks && k.overchargeAuraTicks > 0)) {
+      mult *= 1.10; // Overcharge (+10% move speed, PLAN.md §6.1 / Atom City Landmark)
     }
     if (k.gliding && k.stats.glideSpeedMult) {
       mult *= k.stats.glideSpeedMult;
     }
     if (k.cloudSlowTicks > 0) {
-      mult *= 0.65;
+      mult *= (k.inkSlowMult || 0.65);
     }
     if (k.carrying && k.carrying.def) {
       mult *= k.carrying.def.speedMult;
@@ -346,9 +500,21 @@
     return mult;
   }
 
+  function getFuelGainMult(k, city) {
+    let mult = 1.0;
+    if (city && city.sirenBoostTimer && city.sirenBoostTimer > 0) {
+      mult *= 1.5; // Atom City Siren Pulse: 1.5x fuel gain for 8s
+    }
+    if (k && k.overchargeAuraTicks && k.overchargeAuraTicks > 0) {
+      mult *= 1.25; // Atom City Observation Tower OVERCHARGE aura boost
+    }
+    return mult;
+  }
+
   function updateKaiju(k, intent, city, dt, combatControlled) {
     k.justLanded = false;
     if (k.jetHopTicks > 0) k.jetHopTicks--;
+    if (k.overchargeAuraTicks > 0) k.overchargeAuraTicks--;
     if (combatControlled && k.state === 'climb') {
       k.animT += dt;
       syncKaijuBounds(k);
@@ -398,11 +564,9 @@
     k.x += k.vx * dt;
     k.y += k.vy * dt;
 
-    k.x = U.clamp(k.x, k.r, city.cols - k.r);
-    k.y = U.clamp(k.y, k.r, city.rows - k.r);
+    clampToArenaBounds(k, city);
     resolveBuildingCollisions(k, city.buildings);
-    k.x = U.clamp(k.x, k.r, city.cols - k.r);
-    k.y = U.clamp(k.y, k.r, city.rows - k.r);
+    clampToArenaBounds(k, city);
 
     const floorZ = getRoofFloorZ(k, city.buildings);
     if (k.grounded && k.z > floorZ + 2) {
@@ -484,8 +648,16 @@
     if (cctx.pickups.length >= MAX_PICKUPS) {
       cctx.pickups.shift();
     }
-    const px = city ? U.clamp(x, 0.6, city.cols - 0.6) : x;
-    const py = city ? U.clamp(y, 0.6, city.rows - 0.6) : y;
+    const tmpPk = {
+      x: city ? U.clamp(x, 0.6, city.cols - 0.6) : x,
+      y: city ? U.clamp(y, 0.6, city.rows - 0.6) : y,
+      r: 0.28,
+      vx: 0,
+      vy: 0
+    };
+    if (city) clampToArenaBounds(tmpPk, city);
+    const px = tmpPk.x;
+    const py = tmpPk.y;
     const p = {
       id: nextEntityId++,
       kind: 'pickup',
@@ -530,14 +702,22 @@
     const def = PROP_DEFS[propType] || PROP_DEFS.girder;
     if (props.length >= MAX_PROPS) {
       for (let i = 0; i < props.length; i++) {
-        if (props[i].state === 'ground') {
+        if (props[i].state !== 'carried') {
           props.splice(i, 1);
           break;
         }
       }
     }
-    const px = city ? U.clamp(x, 0.6, city.cols - 0.6) : x;
-    const py = city ? U.clamp(y, 0.6, city.rows - 0.6) : y;
+    const tmpPos = {
+      x: city ? U.clamp(x, 0.6, city.cols - 0.6) : x,
+      y: city ? U.clamp(y, 0.6, city.rows - 0.6) : y,
+      r: def.r || 0.36,
+      vx: 0,
+      vy: 0
+    };
+    if (city) clampToArenaBounds(tmpPos, city);
+    const px = tmpPos.x;
+    const py = tmpPos.y;
     const prop = {
       id: nextEntityId++,
       kind: 'prop',
@@ -583,7 +763,7 @@
     const zMid = Math.max(18, b.zTop * 0.6);
 
     for (let i = 0; i < count; i++) {
-      if (cctx.debris.length >= 220) cctx.debris.shift();
+      if (cctx.debris.length >= 180) cctx.debris.shift();
       const ang = Math.random() * Math.PI * 2;
       const spd = 1.2 + Math.random() * 2.8;
       cctx.debris.push({
@@ -601,7 +781,7 @@
     }
 
     for (let i = 0; i < dustCount; i++) {
-      if (cctx.dust.length >= 120) cctx.dust.shift();
+      if (cctx.dust.length >= 100) cctx.dust.shift();
       cctx.dust.push({
         x: cx + (Math.random() - 0.5) * (box.x1 - box.x0) * 0.9,
         y: cy + (Math.random() - 0.5) * (box.y1 - box.y0) * 0.9,
@@ -689,10 +869,18 @@
         if (dist <= k.r + 0.28) {
           if (p.pickupType === 'health') {
             k.hp = Math.min(k.maxHp, k.hp + 15);
-            if (!cctx.headless) cctx.popups.push({ x: k.x, y: k.y, z: k.z + 92, text: '+15 HP', color: '#ff6b7a', scale: 1.05, life: 42, maxLife: 42 });
+            if (!cctx.headless) {
+              if (cctx.popups.length >= 20) cctx.popups.shift();
+              cctx.popups.push({ x: k.x, y: k.y, z: k.z + 92, text: '+15 HP', color: '#ff6b7a', scale: 1.05, life: 42, maxLife: 42 });
+            }
           } else if (p.pickupType === 'fuel') {
-            k.fuel = Math.min(k.fuelMax, k.fuel + 25);
-            if (!cctx.headless) cctx.popups.push({ x: k.x, y: k.y, z: k.z + 92, text: '+25 FUEL', color: '#7dff4f', scale: 1.05, life: 42, maxLife: 42 });
+            const gain = Math.round(25 * getFuelGainMult(k, city));
+            k.fuel = Math.min(k.fuelMax, k.fuel + gain);
+            k.overcharged = k.fuel >= 80;
+            if (!cctx.headless) {
+              if (cctx.popups.length >= 20) cctx.popups.shift();
+              cctx.popups.push({ x: k.x, y: k.y, z: k.z + 92, text: '+' + gain + ' FUEL', color: '#7dff4f', scale: 1.05, life: 42, maxLife: 42 });
+            }
           }
           Snd.sfx.pickup();
           collected = true;
@@ -774,6 +962,23 @@
       b.exploded = false;
     }
     if (city.slowZones) city.slowZones.length = 0;
+    city.sirenBoostTimer = 0;
+    if (city.hazard) {
+      city.hazard.timer = 0;
+      if (city.hazard.kind === 'siren') {
+        city.hazard.telegraphed = false;
+        city.hazard.boostTimer = 0;
+        city.hazard.flashTimer = 0;
+        city.hazard.waveTimer = 0;
+      } else if (city.hazard.kind === 'train') {
+        city.hazard.state = 'idle';
+        city.hazard.trainX = -4.0;
+        city.hazard.hitIds = [];
+      } else if (city.hazard.kind === 'fissure' || city.hazard.kind === 'broadside') {
+        city.hazard.telegraphed = false;
+        city.hazard.activeTimer = 0;
+      }
+    }
   }
 
   function updateDebrisAndCivilians(cctx, city, dt) {
@@ -866,9 +1071,11 @@
     createKaiju: createKaiju,
     getBuildingCollBox: getBuildingCollBox,
     getMoveSpeedMult: getMoveSpeedMult,
+    getFuelGainMult: getFuelGainMult,
     syncKaijuBounds: syncKaijuBounds,
     syncPropBounds: syncPropBounds,
     resolveBuildingCollisions: resolveBuildingCollisions,
+    clampToArenaBounds: clampToArenaBounds,
     resolveKaijuSeparation: resolveKaijuSeparation,
     updateKaiju: updateKaiju,
     LOOT_TABLES: LOOT_TABLES,

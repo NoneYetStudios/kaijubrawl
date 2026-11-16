@@ -108,6 +108,10 @@
     }
   }
 
+  function prefersReducedMotion() {
+    return typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  }
+
   function updateCamera(cam, targetWorldX, targetWorldY, cols, rows, view, dt) {
     const p = worldToScreen(targetWorldX, targetWorldY, 0);
     cam.targetX = p.sx;
@@ -116,6 +120,13 @@
     cam.x += (cam.targetX - cam.x) * alpha;
     cam.y += (cam.targetY - cam.y) * alpha;
     clampCamera(cam, cols, rows, view);
+
+    if (prefersReducedMotion()) {
+      cam.shakeAmp = 0;
+      cam.shakeX = 0;
+      cam.shakeY = 0;
+      return;
+    }
 
     if (cam.shakeAmp > 0.05) {
       cam.shakeX = (Math.random() * 2 - 1) * cam.shakeAmp;

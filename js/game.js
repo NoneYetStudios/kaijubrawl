@@ -326,34 +326,53 @@
   }
 
   function pickChallengerSpawn() {
+    if (trainingMode) {
+      const sp = (city.spawns && city.spawns.dummy) || { x: 4.0, y: 16.6 };
+      const dir = U.vec2.norm((player.x - sp.x) || 1, (player.y - sp.y) || 0);
+      return { x: sp.x, y: sp.y, dirX: dir.x, dirY: dir.y };
+    }
     const candidates = [
-      city.spawns.dummy || { x: 4.0, y: 16.6 },
-      { x: city.cols - 3.5, y: 4.0 },
-      { x: 3.5, y: city.rows - 3.5 },
-      { x: 4.0, y: 4.0 },
-      { x: city.cols - 4.0, y: city.rows - 4.0 }
+      (city.spawns && city.spawns.enemy) || { x: city.cols - 2.5, y: 2.5 },
+      { x: city.cols - 2.5, y: 2.5 },
+      { x: city.cols - 4.2, y: 4.2 },
+      { x: city.cols - 3.2, y: 3.2 },
+      { x: 2.5, y: 2.5 },
+      { x: 4.2, y: 4.2 },
+      { x: city.cols - 3.2, y: city.rows - 3.2 },
+      { x: city.cols - 4.2, y: city.rows - 4.2 },
+      { x: 2.5, y: city.rows - 2.5 },
+      { x: 4.2, y: city.rows - 4.2 }
     ];
-    let best = candidates[0];
-    let bestDist = -1;
-    for (let i = 0; i < candidates.length; i++) {
-      const c = candidates[i];
-      let blocked = false;
+    function isClear(c) {
+      const probe = { x: c.x, y: c.y, r: 0.72, vx: 0, vy: 0 };
+      Entities.clampToArenaBounds(probe, city);
+      if (Math.hypot(probe.x - c.x, probe.y - c.y) > 0.08) return false;
       for (let j = 0; j < city.buildings.length; j++) {
         const b = city.buildings[j];
         if (b.state === 'rubble') continue;
         const box = Entities.getBuildingCollBox(b);
         if (c.x >= box.x0 - 0.9 && c.x <= box.x1 + 0.9 && c.y >= box.y0 - 0.9 && c.y <= box.y1 + 0.9) {
-          blocked = true;
-          break;
+          return false;
         }
       }
-      if (blocked) continue;
+      return true;
+    }
+    let best = null;
+    let bestDist = -1;
+    for (let i = 0; i < candidates.length; i++) {
+      const c = candidates[i];
+      if (!isClear(c)) continue;
       const d = Math.hypot(c.x - player.x, c.y - player.y);
+      if (d >= 12) {
+        best = c;
+        break;
+      }
       if (d > bestDist) {
         bestDist = d;
         best = c;
       }
     }
+    if (!best) best = { x: city.cols - 2.5, y: 2.5 };
     const dir = U.vec2.norm((player.x - best.x) || 1, (player.y - best.y) || 0);
     return { x: best.x, y: best.y, dirX: dir.x, dirY: dir.y };
   }
@@ -405,7 +424,15 @@
       isBoss: isBoss,
       seed: roundNum * 1337 + kos * 97
     }) : null;
-    titleCard = {
+    titleCard = roundNum === 1 ? {
+      title: 'STF ARCADE PRESENTS...',
+      sub: 'REEL 1 — ' + dummy.stats.name.toUpperCase() + ' IN ' + city.name,
+      round: 1,
+      boss: false,
+      intro: true,
+      ticks: 150,
+      maxTicks: 150
+    } : {
       title: 'REEL ' + roundNum + (isBoss ? ' — BOSS!' : ''),
       sub: dummy.stats.name.toUpperCase() + (isBoss ? ' CRASHES THE SET!' : ' ENTERS THE BRAWL'),
       round: roundNum,
@@ -479,7 +506,7 @@
     document.body.classList.add('playing');
     Snd.resume();
     Snd.sfx.start();
-    Snd.musicStart(function () { return elapsed; });
+    Snd.musicStart(function () { return elapsed; }, function () { return round; });
   }
 
   function pause() {
@@ -496,7 +523,7 @@
     mode = 'play';
     document.body.classList.add('playing');
     Snd.resume();
-    Snd.musicStart(function () { return elapsed; });
+    Snd.musicStart(function () { return elapsed; }, function () { return round; });
     return true;
   }
 
@@ -607,7 +634,10 @@
 
     Combat.updateFighter(kA, iA, simCity, dt, simCctx, kaijus, camObj);
     Combat.updateFighter(kB, iB, simCity, dt, simCctx, kaijus, camObj);
-    if (kA.state !== 'climb' && kB.state !== 'climb') {
+    const dodging = (kA.state === 'dodge' && kA.stateTick <= Combat.DODGE_IFRAME_END) ||
+                    (kB.state === 'dodge' && kB.stateTick <= Combat.DODGE_IFRAME_END) ||
+                    kA.state === 'dodge' || kB.state === 'dodge';
+    if (kA.state !== 'climb' && kB.state !== 'climb' && !dodging) {
       Entities.resolveKaijuSeparation(kA, kB, simCity);
     }
     Combat.resolveMelee(kA, kB, simCctx, camObj, simCity, kaijus);
@@ -617,6 +647,9 @@
     Combat.triggerLandingStomp(kA, simCity, simCctx, pRef, kaijus, camObj);
     Combat.triggerLandingStomp(kB, simCity, simCctx, pRef, kaijus, camObj);
     Combat.updateProps(simCctx, simCity, kaijus, pRef, camObj, dt);
+    if (Combat.updateCityHazards) {
+      Combat.updateCityHazards(simCity, simCctx, kaijus, pRef, camObj, dt);
+    }
 
     if (kA.isPlayer && simCctx && (kA.hp + (kA._selfCostThisTick || 0) < pHpBefore + (kA._healAmtThisTick || 0))) {
       simCctx.playerTookDamageThisRound = true;
@@ -658,7 +691,11 @@
         isNewHigh: runNewHigh,
         kos: kos,
         wrecked: wrecked,
+        buildings_wrecked: wrecked,
         elapsed: elapsed,
+        survival_time: Math.max(1, Math.round(elapsed)),
+        monster_id: player.monsterId,
+        city_id: city.id,
         round: round,
         stylePoints: bd.effectiveStyle,
         rawStylePoints: bd.rawStyle
@@ -948,18 +985,33 @@
     return violations;
   }
 
-  function sortSelfCheck() {
+  function sortSelfCheck(cityIdOrCols, optRows) {
     const rand = U.rng(9001);
     const items = [];
-    const cols = 20;
-    const rows = 10;
+    let arenaCols = 20;
+    let arenaRows = 20;
+    let cityBldViolations = 0;
+
+    if (typeof cityIdOrCols === 'string' && Cities.DEFS && Cities.DEFS[cityIdOrCols]) {
+      const c = Cities.create(cityIdOrCols);
+      arenaCols = c.cols;
+      arenaRows = c.rows;
+      const bSorted = Iso.sortDrawables(c.buildings.slice(), false);
+      cityBldViolations = checkOrderingViolations(bSorted);
+    } else if (typeof cityIdOrCols === 'number' && typeof optRows === 'number') {
+      arenaCols = cityIdOrCols;
+      arenaRows = optRows;
+    }
+
+    const cols = Math.floor(arenaCols);
+    const rows = Math.floor(arenaRows / 2);
 
     let id = 1;
     for (let gy = 0; gy < rows; gy++) {
       for (let gx = 0; gx < cols; gx++) {
         const w = 0.4 + rand() * 1.3;
         const h = 0.4 + rand() * 1.3;
-        const x0 = gx * 2.0 + rand() * (1.85 - w);
+        const x0 = gx * (arenaCols / cols) + rand() * Math.max(0.1, (arenaCols / cols) - 0.15 - w);
         const y0 = gy * 2.0 + rand() * (1.85 - h);
         items.push({
           id: id++,
@@ -1015,11 +1067,13 @@
     const zOk = (zSorted[0].id === 10 && zSorted[1].id === 11);
 
     return {
-      ok: vFull === 0 && vBroad === 0 && wideViolations === 0 && zOk,
+      ok: vFull === 0 && vBroad === 0 && wideViolations === 0 && cityBldViolations === 0 && zOk,
+      arena: arenaCols + 'x' + arenaRows,
       count: items.length,
       violationsFull: vFull,
       violationsBroad: vBroad,
       wideViolations: wideViolations,
+      cityBuildingViolations: cityBldViolations,
       zStackOk: zOk
     };
   }
@@ -1073,7 +1127,15 @@
       intent.moveY = sc.y * 0.4;
     }
 
-    // Occasional Lepidora glide / jump-attack entry
+    if (self.carrying) {
+      const sc = worldToScreenInput(ux, uy);
+      intent.moveX = sc.x;
+      intent.moveY = sc.y;
+      if (dist <= 1.8) intent.heavy = true;
+      else intent.light = true;
+      state.cd = 14;
+      return intent;
+    }
     if (!self.grounded && self.stats.canGlide && self.vz < 0 && dist < 3.6) {
       intent.jumpHeld = true;
     }
@@ -1110,7 +1172,7 @@
     const spCost = (self.stats.specials && self.stats.specials.special && self.stats.specials.special.cost) || 35;
     const spKind = self.stats.specials && self.stats.specials.special && self.stats.specials.special.kind;
     const spMin = spKind === 'beam' ? 2.1 : 0;
-    const spRange = spKind === 'beam' ? 5.2 : (spKind === 'hurl' ? 5.2 : 3.0);
+    const spRange = (spKind === 'beam' || spKind === 'hurl' || spKind === 'gravity_well') ? 5.2 : 3.2;
     if (self.fuel >= spCost && dist >= spMin && dist <= spRange && rand() < 0.28) {
       intent.specialPressed = true;
       state.cd = 26;
@@ -1309,6 +1371,16 @@
     resetDummy: function () {
       resetDummyState();
       updateHud();
+    },
+    getCounts: function () {
+      const out = { slowZones: city.slowZones ? city.slowZones.length : 0, total: 0 };
+      for (const key in cctx) {
+        if (Array.isArray(cctx[key]) && key !== 'propDrops') {
+          out[key] = cctx[key].length;
+          if (key !== 'props' && key !== 'pickups') out.total += cctx[key].length;
+        }
+      }
+      return out;
     },
     wreckAll: function () {
       const kaijus = [player, dummy];

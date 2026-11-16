@@ -336,6 +336,21 @@
         }
       }
 
+      // 4b. Respect wake-up spacing: back off if player is knocked down, getting up, or in post-getup grace
+      if (target.state === 'knockdown' || target.state === 'getup' || (target.wakeupGraceTicks || 0) > 0) {
+        clearTelegraph(self);
+        if (dist < 1.8) {
+          const away = steerAroundBuildings(self, -dirToTarget.x, -dirToTarget.y, city);
+          applyAimMove(intent, self, away.x, away.y, blinded, 0.35);
+          return intent;
+        }
+        const tang = rotateVec(dirToTarget.x, dirToTarget.y, strafeSign * 1.25);
+        const radial = dist < 2.15 ? -0.35 : (dist > 3.2 ? 0.25 : 0);
+        const moveVec = steerAroundBuildings(self, tang.x + dirToTarget.x * radial, tang.y + dirToTarget.y * radial, city);
+        applyAimMove(intent, self, moveVec.x, moveVec.y, blinded, 0.3);
+        return intent;
+      }
+
       // 5. Delayed reactive block / dodge check
       if (state === STATES.BLOCK_REACTIVE) {
         blockTimer--;
@@ -434,9 +449,12 @@
         }
       }
 
-      if (!blinded && actionCooldown <= 0 && dist >= 2.2 && dist <= 5.5 && stateTicks > 20) {
-        const candProp = findNearestProp(self, cctx, 4.4);
-        if (candProp && rand() < params.propProb * 0.08) {
+      const richProps = !!(cctx && cctx.props && cctx.props.length >= 4);
+      const minPropDist = richProps ? 1.7 : 2.2;
+      if (!blinded && actionCooldown <= 0 && dist >= minPropDist && dist <= 5.8 && stateTicks > (richProps ? 10 : 20)) {
+        const candProp = findNearestProp(self, cctx, 4.8);
+        const pChance = richProps ? Math.max(0.35, params.propProb * 0.28) : (params.propProb * 0.08);
+        if (candProp && rand() < pChance) {
           targetPropId = candProp.id;
           setState(STATES.PICKUP_PROP);
           return intent;

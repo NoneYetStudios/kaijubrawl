@@ -652,6 +652,16 @@ Pure Web Audio synthesis, `kb_sfx` toggle, `M` key, AudioContext resume on first
 - Implement `assets.js` loader with manifest + automatic procedural fallback (draw function used if an image is missing). Add monster key-pose atlases, building state sprites, props, pickups, FX.
 - **Verify:** removing any sprite file falls back gracefully; atlas load time ≤ 2 s on 4G; total payload budget met.
 
+### M13.5 — Right-hand arcade keybinds & corner-trap escape mechanics
+**Goal:** Ergonomic two-hand keyboard controls and physics escapes so players can never be pinned indefinitely in an arena corner.
+- `input.js`: add right-hand home-row primary/secondary aliases (`U` and `;` alongside `C` for Dodge Roll; `I` alongside `Shift` for Block; `O` alongside `Q` for Special) so the left hand stays locked on `W A S D` while the right hand operates a 6-button arcade cluster (`U I O` / `J K L`)[cite: 8].
+- `index.html` / `ui.js`: update `#screen-how` ("MATINEE PROGRAM") keycap badges to display the right-hand Dodge (`U` / `;` / `C`), Block (`I` / `Shift`), and Special (`O` / `Q`) bindings[cite: 8].
+- `game.js` / `combat.js` / `entities.js`:
+  - **Dodge phase-through:** skip kaiju-vs-kaiju circle collision while `k.state === 'dodge'` (during i-frames) so a player can roll cleanly through a corner-pinning opponent.
+  - **Corner block push-back & wake-up shockwave:** apply 50 % reverse knockback to the attacker when a defender blocks within `1.5` tiles of an arena wall or building, and emit a zero-damage `1.2`-tile getup shockwave (`0.8`-tile push) on stand-up from `knockdown`.
+  - **Chamfered corner slide:** add `1.2`-tile diagonal corner bevels / tangential slide deflection in `entities.js` arena bounds so entities slide around corners instead of wedging in 90° dead ends.
+- **Verify:** pressing `U` or `;` rolls cleanly through a corner-pinning AI challenger; blocking near a wall pushes the attacker back; standing up from knockdown creates breathing room; `W A S D` + `U I O / J K L` works without lifting off movement keys[cite: 8].
+
 ### M14 — QA, balance, performance & release
 **Goal:** Ship at `kaijubrawl.stabthefinger.com`.
 - Device matrix test (§9.5), 10-minute soak test (no memory growth beyond 50 MB), tuning pass on damage/fuel/loot, add link tile in the arcade (outside this repo), finalize `README.md`, `og.png`, `<meta description>`.
