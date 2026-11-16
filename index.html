@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#081a28">
+  <meta name="description" content="Kaiju Brawl — a campy 1950s B-movie isometric 2.5D kaiju arena brawler. Stomp miniature cities and brawl challengers. An STF Arcade game.">
+  <title>Kaiju Brawl — STF Arcade</title>
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="app">
+
+  <header id="hud">
+    <a id="backBtn" class="btn-back" href="https://arcade.stabthefinger.com">← STF Arcade</a>
+    <div id="stats">
+      <div class="stat"><span class="lbl">SCORE</span><span class="val" id="hudScore">0</span></div>
+      <div class="stat"><span class="lbl">BEST</span><span class="val" id="hudHi">0</span></div>
+      <div class="stat"><span class="lbl">KOs</span><span class="val" id="hudKos">0</span></div>
+      <div class="stat"><span class="lbl">WRECKED</span><span class="val" id="hudWrecked">0</span></div>
+      <div class="stat"><span class="lbl">TIME</span><span class="val" id="hudTime">00:00</span></div>
+    </div>
+    <div id="toggles">
+      <button id="btnView" class="chip" type="button" title="Toggle Auto / Portrait / Landscape">VIEW: AUTO</button>
+      <button id="btnSound" class="chip" type="button" title="Toggle sound (M)">SND</button>
+      <button id="btnPause" class="chip" type="button" title="Pause (P / Esc)">❚❚</button>
+    </div>
+  </header>
+
+  <main id="stage" class="orient-landscape">
+    <canvas id="game" width="1280" height="720"></canvas>
+
+    <!-- In-stage fighter HUD overlay -->
+    <div id="fighterHud" aria-hidden="true">
+      <div class="fighter-col left">
+        <div class="fighter-name" id="hudPlayerName">GORGANTOR</div>
+        <div class="bar-track hp"><div class="bar-fill" id="hudPlayerHp" style="width:100%"></div></div>
+        <div class="bar-track fuel"><div class="bar-fill" id="hudPlayerFuel" style="width:0%"></div></div>
+        <div class="bar-track guard"><div class="bar-fill" id="hudPlayerGuard" style="width:100%"></div></div>
+        <div class="combo-badge" id="comboCounter"></div>
+      </div>
+      <div class="fighter-center">
+        <div class="round-pill" id="hudRound">TRAINING</div>
+        <button class="chip dummy-chip" id="btnDummyMode" type="button" title="Cycle Training Dummy behavior (T)">DUMMY: IDLE</button>
+      </div>
+      <div class="fighter-col right">
+        <div class="fighter-name" id="hudEnemyName">TIN DUMMY</div>
+        <div class="bar-track hp"><div class="bar-fill enemy" id="hudEnemyHp" style="width:100%"></div></div>
+        <div class="bar-track guard"><div class="bar-fill enemy" id="hudEnemyGuard" style="width:100%"></div></div>
+      </div>
+    </div>
+
+    <!-- Mobile virtual joystick & action buttons (wired in M2) -->
+    <div id="touchControls" aria-hidden="true">
+      <div id="joyZone">
+        <div id="joyBase"><div id="joyKnob"></div></div>
+      </div>
+      <div id="btnCluster">
+        <button class="act-btn act-special" data-act="special" type="button">SPEC</button>
+        <button class="act-btn act-meltdown hidden" data-act="ultimate" type="button">MELT</button>
+        <button class="act-btn act-grab" data-act="grab" type="button">GRAB</button>
+        <button class="act-btn act-heavy" data-act="heavy" type="button">HVY</button>
+        <button class="act-btn act-jump" data-act="jump" type="button">JMP</button>
+        <button class="act-btn act-block" data-act="block" type="button">BLK</button>
+        <button class="act-btn act-dodge" data-act="dodge" type="button">ROLL</button>
+        <button class="act-btn act-light" data-act="light" type="button">HIT</button>
+      </div>
+    </div>
+
+    <div id="screens">
+
+      <section class="screen active" id="screen-menu">
+        <div class="panel matinee-panel">
+          <div class="brand">STF ARCADE PRESENTS IN TECHNICOLOR</div>
+          <h1 class="title">KAIJU<br>BRAWL</h1>
+          <div class="subtitle">MATINEE OF DESTRUCTION</div>
+          <div class="tier-preview">
+            <span class="tier-pill common">4 MONSTERS</span>
+            <span class="tier-pill medium">3 CITIES</span>
+            <span class="tier-pill pearl">☢ ATOMIC FUEL</span>
+          </div>
+          <div class="menu-btns">
+            <button class="btn primary" id="btnPlay" type="button">▶ START MATINEE</button>
+            <button class="btn" id="btnHow" type="button">HOW TO PLAY</button>
+            <button class="btn" id="btnBoard" type="button">LEADERBOARD</button>
+          </div>
+          <div class="hi-line">YOUR BEST: <b id="menuHi">0</b></div>
+          <p class="hint">Desktop: WASD + J/K/L/Space · Mobile: Virtual Stick &amp; Buttons</p>
+          <p class="foot">An STF Arcade release</p>
+        </div>
+      </section>
+
+      <section class="screen" id="screen-select">
+        <div class="panel select-panel matinee-panel">
+          <div class="select-head">
+            <div>
+              <div class="eyebrow">DOUBLE FEATURE BILLING</div>
+              <h2>CHOOSE MONSTER &amp; CITY</h2>
+            </div>
+            <button class="btn small" id="btnSelectBack" type="button">BACK</button>
+          </div>
+          <div class="select-section-label">STARRING MONSTER</div>
+          <div class="monster-grid" id="monsterSelectGrid"></div>
+          <div class="select-section-label">FEATURE LOCATION</div>
+          <div class="city-grid" id="citySelectGrid"></div>
+          <div class="row center select-cta-row">
+            <button class="btn primary" id="btnSelectFight" type="button">▶ DROP INTO TOWN</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen" id="screen-how">
+        <div class="panel wide matinee-panel">
+          <h2>MATINEE PROGRAM</h2>
+          <div class="how-grid">
+            <div>
+              <h3>Desktop Controls</h3>
+              <ul>
+                <li><b>Move:</b> <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or <kbd>Arrow</kbd> keys (8-way).</li>
+                <li><b>Combat:</b> <kbd>J</kbd> Light combo · <kbd>K</kbd> Heavy · <kbd>L</kbd> Grab / Throw prop.</li>
+                <li><b>Mobility:</b> <kbd>Space</kbd> Jump / Climb building · <kbd>Shift</kbd> Block · <kbd>C</kbd> Dodge roll.</li>
+                <li><b>Atomic:</b> <kbd>Q</kbd> Special (35 fuel) · <kbd>E</kbd> Meltdown (100 fuel).</li>
+                <li><kbd>P</kbd> / <kbd>Esc</kbd> pause · <kbd>M</kbd> sound</li>
+              </ul>
+              <h3>Mobile Controls</h3>
+              <ul>
+                <li><b>Left Side:</b> Floating virtual joystick (double-flick to dodge).</li>
+                <li><b>Right Side:</b> Action button cluster for Light, Heavy, Grab, Jump, Block, Dodge, Special &amp; Meltdown.</li>
+                <li><b>Orientation:</b> Auto-detects 9:16 portrait or 16:9 landscape, or switch via <b>VIEW</b>.</li>
+              </ul>
+            </div>
+            <div>
+              <h3>Monsters &amp; Arenas</h3>
+              <div class="legend"><div><b>4 Starter Kaiju:</b> Gorgantor, Mighty Mongo, Lepidora, and Tin Colossus — each with distinct stats, climb/glide abilities, and Atomic Specials.</div></div>
+              <div class="legend"><div><b>3 Cities:</b> Pinebrook U.S.A., Atom City Nevada, and Metro Heights.</div></div>
+              <h3>Destructible City Loop</h3>
+              <div class="legend"><div><b>Intact → Damaged → Rubble:</b> Wrecking buildings drops Health Orbs, Atomic Fuel canisters, Steel Girders, and explosive Fuel Tankers.</div></div>
+            </div>
+          </div>
+          <div class="menu-btns row">
+            <button class="btn primary" id="btnHowPlay" type="button">▶ START MATINEE</button>
+            <button class="btn" id="btnHowBack" type="button">BACK</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen" id="screen-board">
+        <div class="panel wide matinee-panel">
+          <h2>TOP 25 MONSTER RAMPAGES</h2>
+          <div id="boardModeNotice" class="board-mode-notice">LOCAL MODE — NO SERVER</div>
+          <div class="pause-section">
+            <div class="seg-group" id="boardViewTabs">
+              <button class="seg-btn active" type="button" data-board-view="overall">OVERALL</button>
+              <button class="seg-btn" type="button" data-board-view="monster">BY MONSTER</button>
+              <button class="seg-btn" type="button" data-board-view="city">BY CITY</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table id="boardTable">
+              <thead><tr><th>#</th><th>PLAYER</th><th>MONSTER</th><th>CITY</th><th>SCORE</th><th>KOs</th><th>TIME</th><th class="hide-sm">DATE</th></tr></thead>
+              <tbody id="boardBody"></tbody>
+            </table>
+            <div id="boardMsg" class="board-msg">Leaderboard API connects in Milestone M10/M11.</div>
+          </div>
+          <div class="menu-btns row">
+            <button class="btn primary" id="btnBoardPlay" type="button">▶ START MATINEE</button>
+            <button class="btn" id="btnBoardRefresh" type="button">REFRESH</button>
+            <button class="btn" id="btnBoardBack" type="button">BACK</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen" id="screen-pause">
+        <div class="panel matinee-panel">
+          <h2>INTERMISSION</h2>
+          <p class="tag">Projector paused. Grab some popcorn.</p>
+          <div class="pause-section">
+            <span class="lbl">SCREEN ORIENTATION</span>
+            <div class="seg-group">
+              <button class="seg-btn active" type="button" data-orient="auto">AUTO</button>
+              <button class="seg-btn" type="button" data-orient="portrait">PORTRAIT 9:16</button>
+              <button class="seg-btn" type="button" data-orient="landscape">LANDSCAPE 16:9</button>
+            </div>
+          </div>
+          <div class="pause-section">
+            <span class="lbl">TOUCH CONTROLS</span>
+            <button class="btn small" id="btnPauseTouch" type="button">TOUCH OVERLAY: AUTO</button>
+          </div>
+          <div class="menu-btns">
+            <button class="btn primary" id="btnResume" type="button">RESUME</button>
+            <button class="btn" id="btnQuit" type="button">QUIT TO MENU</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen" id="screen-over">
+        <div class="panel wide over-panel matinee-panel">
+          <h2 class="red">THE END?</h2>
+          <div class="newhigh" id="newHigh">★ NEW PERSONAL BEST ★</div>
+          <div class="results">
+            <div><span class="lbl">SCORE</span><b id="goScore">0</b></div>
+            <div><span class="lbl">KOs</span><b id="goKos">0</b></div>
+            <div><span class="lbl">WRECKED</span><b id="goWrecked">0</b></div>
+            <div><span class="lbl">SURVIVED</span><b id="goTime">00:00</b></div>
+          </div>
+          <form id="submitForm" autocomplete="off">
+            <label for="nameInput" class="lbl">POST TO GLOBAL LEADERBOARD</label>
+            <div class="name-badge-wrapper">
+              <div class="badge-panel">
+                <div class="badge-caption">MONSTER TAG:</div>
+                <input id="nameInput" type="text" maxlength="12" placeholder="KAIJU" spellcheck="false" autocapitalize="characters">
+              </div>
+              <button class="btn primary" id="btnSubmit" type="submit">SUBMIT</button>
+            </div>
+            <div id="submitMsg" class="submit-msg"></div>
+          </form>
+          <div class="menu-btns row">
+            <button class="btn primary" id="btnAgain" type="button">▶ REPLAY MATINEE</button>
+            <button class="btn" id="btnOverBoard" type="button">FULL BOARD</button>
+            <button class="btn" id="btnOverMenu" type="button">MENU</button>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </main>
+</div>
+
+<script src="js/config.js"></script>
+<script src="js/util.js"></script>
+<script src="js/audio.js"></script>
+<script src="js/input.js"></script>
+<script src="js/iso.js"></script>
+<script src="js/assets.js"></script>
+<script src="js/data-monsters.js"></script>
+<script src="js/data-cities.js"></script>
+<script src="js/entities.js"></script>
+<script src="js/combat.js"></script>
+<script src="js/ai.js"></script>
+<script src="js/render.js"></script>
+<script src="js/game.js"></script>
+<script src="js/ui.js"></script>
+</body>
+</html>
