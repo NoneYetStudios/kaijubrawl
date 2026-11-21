@@ -4,6 +4,8 @@ A campy 1950s B-movie isometric 2.5D kaiju arena brawler built for **STF Arcade*
 
 Zero build steps. Zero npm/Node dependencies. Pure HTML5 Canvas, Web Audio API synthesis, and native CSS on the client, paired with a lightweight PHP 7.4+ / SQLite global leaderboard (plus automatic browser `localStorage` Local Mode fallback when served statically).
 
+Built with **Google Antigravity** · Play it live: [kaijubrawl.stabthefinger.com](https://kaijubrawl.stabthefinger.com) · Part of the [STF Arcade](https://stabthefinger.com/stfarcade.html)
+
 ---
 
 ## Running Locally
